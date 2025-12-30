@@ -1840,6 +1840,209 @@ async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> d
 
 
 # =============================================================================
+# Profile Management Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def get_profile_sections() -> dict:
+    """
+    Get all editable profile sections with current content.
+
+    Returns overview of profile sections including:
+    - Basic info (name, headline, location)
+    - About/Summary
+    - Experience count
+    - Education count
+    - Skills overview
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.get_profile_sections()
+
+
+@mcp.tool()
+async def get_profile_completeness() -> dict:
+    """
+    Calculate profile completeness score with improvement suggestions.
+
+    Returns:
+    - Completeness score (0-100)
+    - Completed vs total sections
+    - Specific suggestions for improvement
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.get_profile_completeness()
+
+
+@mcp.tool()
+async def update_profile_headline(headline: str) -> dict:
+    """
+    Update profile headline.
+
+    Requires Playwright browser automation to be enabled.
+
+    Args:
+        headline: New headline text (max 220 characters)
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    ctx = get_context()
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.update_headline(headline)
+
+
+@mcp.tool()
+async def update_profile_summary(summary: str) -> dict:
+    """
+    Update profile summary/about section.
+
+    Requires Playwright browser automation to be enabled.
+
+    Args:
+        summary: New summary text (max 2600 characters)
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    ctx = get_context()
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.update_summary(summary)
+
+
+@mcp.tool()
+async def upload_profile_photo(photo_path: str) -> dict:
+    """
+    Upload a new profile photo.
+
+    Requires Playwright browser automation to be enabled.
+
+    Args:
+        photo_path: Absolute path to the photo file (JPG, PNG)
+
+    Returns success status.
+    """
+    from pathlib import Path
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    # Validate file exists
+    if not Path(photo_path).exists():
+        return {"error": f"File not found: {photo_path}"}
+
+    # Validate file extension
+    valid_extensions = (".jpg", ".jpeg", ".png", ".gif")
+    if not photo_path.lower().endswith(valid_extensions):
+        return {"error": f"Invalid file type. Supported: {', '.join(valid_extensions)}"}
+
+    ctx = get_context()
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.upload_profile_photo(photo_path)
+
+
+@mcp.tool()
+async def upload_background_photo(photo_path: str) -> dict:
+    """
+    Upload a new background/banner photo.
+
+    Requires Playwright browser automation to be enabled.
+
+    Args:
+        photo_path: Absolute path to the photo file (JPG, PNG)
+
+    Returns success status.
+    """
+    from pathlib import Path
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    # Validate file exists
+    if not Path(photo_path).exists():
+        return {"error": f"File not found: {photo_path}"}
+
+    # Validate file extension
+    valid_extensions = (".jpg", ".jpeg", ".png")
+    if not photo_path.lower().endswith(valid_extensions):
+        return {"error": f"Invalid file type. Supported: {', '.join(valid_extensions)}"}
+
+    ctx = get_context()
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.upload_background_photo(photo_path)
+
+
+@mcp.tool()
+async def add_profile_skill(skill_name: str) -> dict:
+    """
+    Add a skill to your profile.
+
+    Requires Playwright browser automation to be enabled.
+
+    Args:
+        skill_name: Name of the skill to add
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.profile import ProfileManager
+
+    ctx = get_context()
+    manager = ProfileManager(ctx.linkedin_client)
+    return await manager.add_skill(skill_name)
+
+
+@mcp.tool()
+async def check_browser_automation_status() -> dict:
+    """
+    Check if browser automation is available for profile updates.
+
+    Returns availability status and feature capabilities.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.browser import get_browser_automation
+
+    ctx = get_context()
+    automation = get_browser_automation()
+
+    features_requiring_browser = [
+        "update_profile_headline",
+        "update_profile_summary",
+        "upload_profile_photo",
+        "upload_background_photo",
+        "add_profile_skill",
+    ]
+
+    return {
+        "success": True,
+        "browser_available": ctx.has_browser,
+        "automation_ready": automation is not None and automation.is_available,
+        "features_requiring_browser": features_requiring_browser,
+        "note": "Browser automation is optional but enables profile update features.",
+    }
+
+
+# =============================================================================
 # Server Info Resource
 # =============================================================================
 
