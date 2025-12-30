@@ -848,6 +848,374 @@ async def get_rate_limit_status() -> dict:
     }
 
 
+@mcp.tool()
+async def analyze_engagement(post_urn: str, follower_count: int | None = None) -> dict:
+    """
+    Perform deep engagement analysis on a specific post.
+
+    Args:
+        post_urn: LinkedIn post URN
+        follower_count: Author's follower count for rate calculation (optional)
+
+    Returns comprehensive engagement metrics, reaction distribution, and quality score.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import get_engagement_analyzer
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    analyzer = get_engagement_analyzer()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        # Fetch engagement data
+        reactions = await ctx.linkedin_client.get_post_reactions(post_urn)
+        comments = await ctx.linkedin_client.get_post_comments(post_urn)
+
+        # Analyze engagement rate
+        engagement_metrics = analyzer.calculate_engagement_rate(
+            reactions=len(reactions),
+            comments=len(comments),
+            shares=0,  # Share count not available via unofficial API
+            views=None,  # Requires Partner API
+            follower_count=follower_count,
+        )
+
+        # Analyze reaction distribution
+        reaction_analysis = analyzer.analyze_reaction_distribution(reactions)
+
+        return {
+            "success": True,
+            "post_urn": post_urn,
+            "engagement": engagement_metrics,
+            "reactions": reaction_analysis,
+            "comments_count": len(comments),
+        }
+    except Exception as e:
+        logger.error("Failed to analyze engagement", error=str(e), post_urn=post_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def analyze_content_performance(profile_id: str, post_limit: int = 20) -> dict:
+    """
+    Analyze content performance patterns for a profile.
+
+    Args:
+        profile_id: LinkedIn public ID
+        post_limit: Number of posts to analyze (default: 20, max: 50)
+
+    Returns content analysis with type distribution, engagement patterns, and recommendations.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import get_content_analyzer
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    analyzer = get_content_analyzer()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    post_limit = min(post_limit, 50)
+
+    try:
+        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+
+        if not posts:
+            return {"success": True, "message": "No posts found for analysis"}
+
+        analysis = analyzer.analyze_posts_performance(posts)
+
+        return {
+            "success": True,
+            "profile_id": profile_id,
+            "analysis": analysis,
+        }
+    except Exception as e:
+        logger.error("Failed to analyze content", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def analyze_optimal_posting_times(profile_id: str, post_limit: int = 30) -> dict:
+    """
+    Analyze optimal posting times based on engagement patterns.
+
+    Args:
+        profile_id: LinkedIn public ID
+        post_limit: Number of posts to analyze (default: 30, max: 50)
+
+    Returns optimal posting times by hour and day with engagement averages.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import get_posting_time_analyzer
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    analyzer = get_posting_time_analyzer()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    post_limit = min(post_limit, 50)
+
+    try:
+        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+
+        if not posts:
+            return {"success": True, "message": "No posts found for analysis"}
+
+        analysis = analyzer.analyze_posting_patterns(posts)
+
+        return {
+            "success": True,
+            "profile_id": profile_id,
+            "posting_analysis": analysis,
+        }
+    except Exception as e:
+        logger.error("Failed to analyze posting times", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def analyze_post_audience(post_urn: str) -> dict:
+    """
+    Analyze the audience engaging with a specific post.
+
+    Args:
+        post_urn: LinkedIn post URN
+
+    Returns audience demographics based on commenters' profiles.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import get_audience_analyzer
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    analyzer = get_audience_analyzer()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        comments = await ctx.linkedin_client.get_post_comments(post_urn)
+
+        if not comments:
+            return {"success": True, "message": "No comments to analyze"}
+
+        analysis = analyzer.analyze_commenters(comments)
+
+        return {
+            "success": True,
+            "post_urn": post_urn,
+            "audience_analysis": analysis,
+        }
+    except Exception as e:
+        logger.error("Failed to analyze audience", error=str(e), post_urn=post_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def analyze_hashtag_performance(profile_id: str, post_limit: int = 30) -> dict:
+    """
+    Analyze hashtag usage and performance.
+
+    Args:
+        profile_id: LinkedIn public ID
+        post_limit: Number of posts to analyze (default: 30, max: 50)
+
+    Returns hashtag frequency, engagement correlation, and recommendations.
+    """
+    from collections import Counter
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import get_content_analyzer
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    analyzer = get_content_analyzer()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    post_limit = min(post_limit, 50)
+
+    try:
+        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+
+        if not posts:
+            return {"success": True, "message": "No posts found for analysis"}
+
+        # Analyze hashtags and their engagement
+        hashtag_engagement: dict[str, list[int]] = {}
+        posts_with_hashtags = 0
+        posts_without_hashtags = 0
+        engagement_with_hashtags: list[int] = []
+        engagement_without_hashtags: list[int] = []
+
+        for post in posts:
+            content = post.get("commentary", post.get("text", ""))
+            hashtags = analyzer.extract_hashtags(content)
+
+            reactions = post.get("numLikes", 0) or 0
+            comments = post.get("numComments", 0) or 0
+            total_engagement = reactions + comments
+
+            if hashtags:
+                posts_with_hashtags += 1
+                engagement_with_hashtags.append(total_engagement)
+                for tag in hashtags:
+                    if tag not in hashtag_engagement:
+                        hashtag_engagement[tag] = []
+                    hashtag_engagement[tag].append(total_engagement)
+            else:
+                posts_without_hashtags += 1
+                engagement_without_hashtags.append(total_engagement)
+
+        # Calculate averages per hashtag
+        hashtag_performance = {}
+        for tag, engagements in hashtag_engagement.items():
+            hashtag_performance[tag] = {
+                "uses": len(engagements),
+                "avg_engagement": round(sum(engagements) / len(engagements), 1),
+            }
+
+        # Sort by average engagement
+        top_hashtags = sorted(
+            hashtag_performance.items(),
+            key=lambda x: x[1]["avg_engagement"],
+            reverse=True,
+        )[:10]
+
+        # Compare hashtag vs no-hashtag performance
+        avg_with = round(sum(engagement_with_hashtags) / len(engagement_with_hashtags), 1) if engagement_with_hashtags else 0
+        avg_without = round(sum(engagement_without_hashtags) / len(engagement_without_hashtags), 1) if engagement_without_hashtags else 0
+
+        recommendations = []
+        if avg_with > avg_without:
+            recommendations.append(f"Posts with hashtags perform {round(avg_with/avg_without if avg_without else 1, 1)}x better")
+        if top_hashtags:
+            recommendations.append(f"Best performing hashtags: #{top_hashtags[0][0]}")
+
+        return {
+            "success": True,
+            "profile_id": profile_id,
+            "hashtag_analysis": {
+                "posts_with_hashtags": posts_with_hashtags,
+                "posts_without_hashtags": posts_without_hashtags,
+                "avg_engagement_with_hashtags": avg_with,
+                "avg_engagement_without_hashtags": avg_without,
+                "top_performing_hashtags": dict(top_hashtags),
+                "all_hashtags": dict(Counter(
+                    tag for post in posts
+                    for tag in analyzer.extract_hashtags(post.get("commentary", post.get("text", "")))
+                ).most_common(20)),
+            },
+            "recommendations": recommendations,
+        }
+    except Exception as e:
+        logger.error("Failed to analyze hashtags", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> dict:
+    """
+    Generate a comprehensive engagement report for a profile.
+
+    Args:
+        profile_id: LinkedIn public ID
+        post_limit: Number of posts to analyze (default: 20)
+
+    Returns a full engagement report with content analysis, timing, and recommendations.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import (
+        get_content_analyzer,
+        get_engagement_analyzer,
+        get_posting_time_analyzer,
+    )
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    engagement_analyzer = get_engagement_analyzer()
+    content_analyzer = get_content_analyzer()
+    posting_analyzer = get_posting_time_analyzer()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    post_limit = min(post_limit, 50)
+
+    try:
+        # Fetch data
+        profile = await ctx.linkedin_client.get_profile(profile_id)
+        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+
+        if not posts:
+            return {"success": True, "message": "No posts found for report"}
+
+        # Aggregate engagement
+        total_reactions = 0
+        total_comments = 0
+
+        for post in posts:
+            total_reactions += post.get("numLikes", 0) or 0
+            total_comments += post.get("numComments", 0) or 0
+
+        avg_reactions = round(total_reactions / len(posts), 1)
+        avg_comments = round(total_comments / len(posts), 1)
+
+        # Run analyses
+        content_analysis = content_analyzer.analyze_posts_performance(posts)
+        timing_analysis = posting_analyzer.analyze_posting_patterns(posts)
+
+        # Calculate overall engagement rate
+        follower_count = profile.get("followerCount", profile.get("numFollowers"))
+        overall_engagement = engagement_analyzer.calculate_engagement_rate(
+            reactions=total_reactions,
+            comments=total_comments,
+            shares=0,
+            follower_count=follower_count,
+        )
+
+        return {
+            "success": True,
+            "report": {
+                "profile": {
+                    "id": profile_id,
+                    "name": f"{profile.get('firstName', '')} {profile.get('lastName', '')}".strip(),
+                    "headline": profile.get("headline", ""),
+                    "followers": follower_count,
+                },
+                "summary": {
+                    "posts_analyzed": len(posts),
+                    "total_reactions": total_reactions,
+                    "total_comments": total_comments,
+                    "avg_reactions_per_post": avg_reactions,
+                    "avg_comments_per_post": avg_comments,
+                    "overall_engagement": overall_engagement,
+                },
+                "content_analysis": content_analysis,
+                "timing_analysis": timing_analysis,
+                "recommendations": content_analysis.get("recommendations", [])
+                + timing_analysis.get("recommended_posting_times", []),
+            },
+        }
+    except Exception as e:
+        logger.error("Failed to generate report", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
 # =============================================================================
 # Server Info Resource
 # =============================================================================
@@ -899,7 +1267,7 @@ async def server_info() -> str:
 
 
 @mcp.prompt()
-def analyze_engagement(profile_id: str) -> str:
+def engagement_analysis_prompt(profile_id: str) -> str:
     """
     Generate a prompt to analyze engagement patterns for a profile.
     """
