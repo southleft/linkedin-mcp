@@ -48,27 +48,38 @@ async def get_my_profile() -> dict:
 
 
 @mcp.tool()
-async def get_profile(profile_id: str) -> dict:
+async def get_profile(profile_id: str, use_cache: bool = True) -> dict:
     """
     Get a LinkedIn profile by public ID or URN.
 
     Args:
         profile_id: LinkedIn public ID (e.g., "johndoe") or URN
+        use_cache: Whether to use cached data if available (default: True)
 
     Returns profile data including experience, education, and skills.
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
 
     logger = get_logger(__name__)
     ctx = get_context()
+    cache = get_cache()
 
     if not ctx.linkedin_client:
         return {"error": "LinkedIn client not initialized"}
 
+    cache_key = cache.make_key("profile", profile_id)
+
     try:
+        if use_cache:
+            cached_data = await cache.get(cache_key)
+            if cached_data:
+                return {"success": True, "profile": cached_data, "cached": True}
+
         profile = await ctx.linkedin_client.get_profile(profile_id)
-        return {"success": True, "profile": profile}
+        await cache.set(cache_key, profile, CacheService.TTL_PROFILE)
+        return {"success": True, "profile": profile, "cached": False}
     except Exception as e:
         logger.error("Failed to fetch profile", error=str(e), profile_id=profile_id)
         return {"error": str(e)}
@@ -101,65 +112,279 @@ async def get_profile_contact_info(profile_id: str) -> dict:
         return {"error": str(e)}
 
 
+@mcp.tool()
+async def get_profile_skills(profile_id: str) -> dict:
+    """
+    Get skills and endorsements for a LinkedIn profile.
+
+    Args:
+        profile_id: LinkedIn public ID
+
+    Returns skills categorized by endorsement count with top endorsers.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    cache_key = cache.make_key("skills", profile_id)
+
+    try:
+        # Check cache first
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "skills": cached_data, "cached": True}
+
+        profile = await ctx.linkedin_client.get_profile(profile_id)
+        skills = profile.get("skills", [])
+
+        # Extract and categorize skills
+        skill_data = []
+        for skill in skills:
+            skill_data.append({
+                "name": skill.get("name", ""),
+                "endorsement_count": skill.get("endorsementCount", 0),
+            })
+
+        # Sort by endorsement count
+        skill_data.sort(key=lambda x: x["endorsement_count"], reverse=True)
+
+        await cache.set(cache_key, skill_data, CacheService.TTL_PROFILE)
+
+        return {
+            "success": True,
+            "skills": skill_data,
+            "total_skills": len(skill_data),
+            "cached": False,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch skills", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_network_stats() -> dict:
+    """
+    Get statistics about the authenticated user's LinkedIn network.
+
+    Returns network size, growth indicators, and connection insights.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    cache_key = "network:stats"
+
+    try:
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "stats": cached_data, "cached": True}
+
+        # Fetch connections
+        connections = await ctx.linkedin_client.get_profile_connections(limit=500)
+
+        # Analyze industries
+        industries: dict[str, int] = {}
+        locations: dict[str, int] = {}
+        companies: dict[str, int] = {}
+
+        for conn in connections:
+            industry = conn.get("industry", "Unknown")
+            industries[industry] = industries.get(industry, 0) + 1
+
+            location = conn.get("locationName", "Unknown")
+            locations[location] = locations.get(location, 0) + 1
+
+            company = conn.get("companyName", "Unknown")
+            if company != "Unknown":
+                companies[company] = companies.get(company, 0) + 1
+
+        # Sort and get top entries
+        top_industries = sorted(industries.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_locations = sorted(locations.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_companies = sorted(companies.items(), key=lambda x: x[1], reverse=True)[:10]
+
+        stats = {
+            "total_connections": len(connections),
+            "top_industries": dict(top_industries),
+            "top_locations": dict(top_locations),
+            "top_companies": dict(top_companies),
+        }
+
+        await cache.set(cache_key, stats, CacheService.TTL_CONNECTIONS)
+
+        return {"success": True, "stats": stats, "cached": False}
+    except Exception as e:
+        logger.error("Failed to fetch network stats", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def batch_get_profiles(profile_ids: str) -> dict:
+    """
+    Get multiple LinkedIn profiles efficiently.
+
+    Args:
+        profile_ids: Comma-separated list of profile public IDs (max 10)
+
+    Returns profiles with basic info and success/failure status for each.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    # Parse and validate IDs
+    ids = [p.strip() for p in profile_ids.split(",") if p.strip()]
+    if not ids:
+        return {"error": "No profile IDs provided"}
+
+    if len(ids) > 10:
+        return {"error": "Maximum 10 profiles per batch request"}
+
+    results = []
+    errors = []
+
+    for profile_id in ids:
+        cache_key = cache.make_key("profile", profile_id)
+
+        try:
+            # Check cache
+            cached = await cache.get(cache_key)
+            if cached:
+                results.append({"profile_id": profile_id, "profile": cached, "cached": True})
+                continue
+
+            # Fetch from API
+            profile = await ctx.linkedin_client.get_profile(profile_id)
+            await cache.set(cache_key, profile, CacheService.TTL_PROFILE)
+            results.append({"profile_id": profile_id, "profile": profile, "cached": False})
+
+        except Exception as e:
+            logger.warning("Failed to fetch profile in batch", profile_id=profile_id, error=str(e))
+            errors.append({"profile_id": profile_id, "error": str(e)})
+
+    return {
+        "success": True,
+        "profiles": results,
+        "errors": errors,
+        "total_requested": len(ids),
+        "total_fetched": len(results),
+        "total_errors": len(errors),
+    }
+
+
+@mcp.tool()
+async def get_cache_stats() -> dict:
+    """
+    Get cache statistics and performance metrics.
+
+    Returns cache size, hit rate, and memory usage.
+    """
+    from linkedin_mcp.services.cache import get_cache
+
+    cache = get_cache()
+    return {"success": True, "cache": cache.stats}
+
+
 # =============================================================================
 # Feed & Posts Tools
 # =============================================================================
 
 
 @mcp.tool()
-async def get_feed(limit: int = 10) -> dict:
+async def get_feed(limit: int = 10, use_cache: bool = True) -> dict:
     """
     Get the authenticated user's LinkedIn feed.
 
     Args:
         limit: Maximum number of feed items to return (default: 10, max: 50)
+        use_cache: Whether to use cached data if available (default: True)
 
     Returns recent feed posts with engagement data.
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
 
     logger = get_logger(__name__)
     ctx = get_context()
+    cache = get_cache()
 
     if not ctx.linkedin_client:
         return {"error": "LinkedIn client not initialized"}
 
     limit = min(limit, 50)  # Cap at 50
+    cache_key = cache.make_key("feed", str(limit))
 
     try:
+        if use_cache:
+            cached_data = await cache.get(cache_key)
+            if cached_data:
+                return {"success": True, "posts": cached_data, "count": len(cached_data), "cached": True}
+
         feed = await ctx.linkedin_client.get_feed(limit=limit)
-        return {"success": True, "posts": feed, "count": len(feed)}
+        await cache.set(cache_key, feed, CacheService.TTL_FEED)
+        return {"success": True, "posts": feed, "count": len(feed), "cached": False}
     except Exception as e:
         logger.error("Failed to fetch feed", error=str(e))
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def get_profile_posts(profile_id: str, limit: int = 10) -> dict:
+async def get_profile_posts(profile_id: str, limit: int = 10, use_cache: bool = True) -> dict:
     """
     Get posts from a specific LinkedIn profile.
 
     Args:
         profile_id: LinkedIn public ID or URN
         limit: Maximum number of posts to return (default: 10, max: 50)
+        use_cache: Whether to use cached data if available (default: True)
 
     Returns posts with engagement metrics (likes, comments, shares).
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
 
     logger = get_logger(__name__)
     ctx = get_context()
+    cache = get_cache()
 
     if not ctx.linkedin_client:
         return {"error": "LinkedIn client not initialized"}
 
     limit = min(limit, 50)  # Cap at 50
+    cache_key = cache.make_key("posts", profile_id, str(limit))
 
     try:
+        if use_cache:
+            cached_data = await cache.get(cache_key)
+            if cached_data:
+                return {"success": True, "posts": cached_data, "count": len(cached_data), "cached": True}
+
         posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=limit)
-        return {"success": True, "posts": posts, "count": len(posts)}
+        await cache.set(cache_key, posts, CacheService.TTL_POSTS)
+        return {"success": True, "posts": posts, "count": len(posts), "cached": False}
     except Exception as e:
         logger.error("Failed to fetch posts", error=str(e), profile_id=profile_id)
         return {"error": str(e)}
