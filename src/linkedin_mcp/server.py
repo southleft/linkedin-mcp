@@ -426,6 +426,368 @@ async def create_post(text: str, visibility: str = "PUBLIC") -> dict:
 
 
 # =============================================================================
+# Content Creation & Scheduling Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def analyze_draft_content(content: str, industry: str | None = None) -> dict:
+    """
+    Analyze draft content and get suggestions for improvement.
+
+    Args:
+        content: Draft post content to analyze
+        industry: Optional industry for targeted hashtag suggestions
+
+    Returns content analysis with score, suggestions, and recommended hashtags.
+    """
+    from linkedin_mcp.services.scheduler import get_suggestion_engine
+
+    engine = get_suggestion_engine()
+
+    analysis = engine.analyze_content(content)
+    suggested_hashtags = engine.suggest_hashtags(content, industry)
+
+    analysis["suggested_hashtags"] = suggested_hashtags
+
+    return {"success": True, "analysis": analysis}
+
+
+@mcp.tool()
+async def create_draft(
+    content: str,
+    title: str | None = None,
+    tags: str | None = None,
+) -> dict:
+    """
+    Create a content draft for later publishing.
+
+    Args:
+        content: Draft content
+        title: Optional title for organization
+        tags: Comma-separated tags for categorization
+
+    Returns the created draft details.
+    """
+    from linkedin_mcp.services.scheduler import get_draft_manager
+
+    manager = get_draft_manager()
+
+    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+
+    draft = manager.create_draft(content=content, title=title, tags=tag_list)
+
+    return {"success": True, "draft": draft}
+
+
+@mcp.tool()
+async def list_drafts(tag: str | None = None) -> dict:
+    """
+    List all content drafts.
+
+    Args:
+        tag: Optional tag to filter by
+
+    Returns list of drafts sorted by last update.
+    """
+    from linkedin_mcp.services.scheduler import get_draft_manager
+
+    manager = get_draft_manager()
+
+    drafts = manager.list_drafts(tag=tag)
+
+    return {"success": True, "drafts": drafts, "count": len(drafts)}
+
+
+@mcp.tool()
+async def get_draft(draft_id: str) -> dict:
+    """
+    Get a specific draft by ID.
+
+    Args:
+        draft_id: ID of the draft
+
+    Returns the draft details.
+    """
+    from linkedin_mcp.services.scheduler import get_draft_manager
+
+    manager = get_draft_manager()
+
+    draft = manager.get_draft(draft_id)
+
+    if not draft:
+        return {"error": f"Draft not found: {draft_id}"}
+
+    return {"success": True, "draft": draft}
+
+
+@mcp.tool()
+async def update_draft(
+    draft_id: str,
+    content: str | None = None,
+    title: str | None = None,
+    tags: str | None = None,
+) -> dict:
+    """
+    Update a content draft.
+
+    Args:
+        draft_id: ID of the draft to update
+        content: New content (optional)
+        title: New title (optional)
+        tags: New comma-separated tags (optional)
+
+    Returns the updated draft.
+    """
+    from linkedin_mcp.services.scheduler import get_draft_manager
+
+    manager = get_draft_manager()
+
+    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+
+    draft = manager.update_draft(
+        draft_id=draft_id,
+        content=content,
+        title=title,
+        tags=tag_list,
+    )
+
+    if not draft:
+        return {"error": f"Draft not found: {draft_id}"}
+
+    return {"success": True, "draft": draft}
+
+
+@mcp.tool()
+async def delete_draft(draft_id: str) -> dict:
+    """
+    Delete a content draft.
+
+    Args:
+        draft_id: ID of the draft to delete
+
+    Returns success status.
+    """
+    from linkedin_mcp.services.scheduler import get_draft_manager
+
+    manager = get_draft_manager()
+
+    if manager.delete_draft(draft_id):
+        return {"success": True, "message": f"Draft {draft_id} deleted"}
+
+    return {"error": f"Draft not found: {draft_id}"}
+
+
+@mcp.tool()
+async def publish_draft(draft_id: str, visibility: str = "PUBLIC") -> dict:
+    """
+    Publish a draft as a LinkedIn post.
+
+    Args:
+        draft_id: ID of the draft to publish
+        visibility: Post visibility - PUBLIC, CONNECTIONS, or LOGGED_IN
+
+    Returns the published post details.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.scheduler import get_draft_manager
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    manager = get_draft_manager()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    draft = manager.get_draft(draft_id)
+    if not draft:
+        return {"error": f"Draft not found: {draft_id}"}
+
+    try:
+        result = await ctx.linkedin_client.create_post(
+            draft["content"],
+            visibility=visibility,
+        )
+
+        # Mark draft as published
+        draft["status"] = "published"
+        draft["published_at"] = result.get("created", "")
+
+        return {
+            "success": True,
+            "draft_id": draft_id,
+            "post": result,
+        }
+    except Exception as e:
+        logger.error("Failed to publish draft", error=str(e), draft_id=draft_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def schedule_post(
+    content: str,
+    scheduled_time: str,
+    visibility: str = "PUBLIC",
+    timezone: str = "UTC",
+) -> dict:
+    """
+    Schedule a post for future publishing.
+
+    Args:
+        content: Post content
+        scheduled_time: ISO format datetime (e.g., "2024-12-25T10:00:00")
+        visibility: Post visibility - PUBLIC, CONNECTIONS, or LOGGED_IN
+        timezone: Timezone for the scheduled time (default: UTC)
+
+    Returns the scheduled post details with job_id.
+    """
+    from datetime import datetime
+
+    from linkedin_mcp.config.constants import MAX_POST_LENGTH
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.scheduler import get_post_manager
+
+    logger = get_logger(__name__)
+    manager = get_post_manager()
+
+    # Validate content length
+    if len(content) > MAX_POST_LENGTH:
+        return {"error": f"Post exceeds maximum length of {MAX_POST_LENGTH} characters"}
+
+    # Validate visibility
+    if visibility not in ("PUBLIC", "CONNECTIONS", "LOGGED_IN"):
+        return {"error": "Invalid visibility. Must be PUBLIC, CONNECTIONS, or LOGGED_IN"}
+
+    # Parse scheduled time
+    try:
+        scheduled_dt = datetime.fromisoformat(scheduled_time.replace("Z", "+00:00"))
+    except ValueError as e:
+        return {"error": f"Invalid datetime format: {e}"}
+
+    # Check if time is in the future
+    if scheduled_dt <= datetime.now():
+        return {"error": "Scheduled time must be in the future"}
+
+    post = manager.schedule_post(
+        content=content,
+        scheduled_time=scheduled_dt,
+        visibility=visibility,
+        timezone=timezone,
+    )
+
+    logger.info("Post scheduled", job_id=post["job_id"])
+
+    return {"success": True, "scheduled_post": post}
+
+
+@mcp.tool()
+async def list_scheduled_posts(status: str | None = None) -> dict:
+    """
+    List all scheduled posts.
+
+    Args:
+        status: Filter by status (pending, published, failed, cancelled)
+
+    Returns list of scheduled posts.
+    """
+    from linkedin_mcp.services.scheduler import get_post_manager
+
+    manager = get_post_manager()
+
+    posts = manager.list_scheduled_posts(status=status)
+
+    return {"success": True, "scheduled_posts": posts, "count": len(posts)}
+
+
+@mcp.tool()
+async def get_scheduled_post(job_id: str) -> dict:
+    """
+    Get a specific scheduled post.
+
+    Args:
+        job_id: ID of the scheduled post
+
+    Returns the scheduled post details.
+    """
+    from linkedin_mcp.services.scheduler import get_post_manager
+
+    manager = get_post_manager()
+
+    post = manager.get_scheduled_post(job_id)
+
+    if not post:
+        return {"error": f"Scheduled post not found: {job_id}"}
+
+    return {"success": True, "scheduled_post": post}
+
+
+@mcp.tool()
+async def cancel_scheduled_post(job_id: str) -> dict:
+    """
+    Cancel a scheduled post.
+
+    Args:
+        job_id: ID of the scheduled post to cancel
+
+    Returns success status.
+    """
+    from linkedin_mcp.services.scheduler import get_post_manager
+
+    manager = get_post_manager()
+
+    if manager.cancel_scheduled_post(job_id):
+        return {"success": True, "message": f"Scheduled post {job_id} cancelled"}
+
+    return {"error": f"Cannot cancel post: {job_id}. Post may not exist or is not pending."}
+
+
+@mcp.tool()
+async def update_scheduled_post(
+    job_id: str,
+    content: str | None = None,
+    scheduled_time: str | None = None,
+    visibility: str | None = None,
+) -> dict:
+    """
+    Update a scheduled post.
+
+    Args:
+        job_id: ID of the scheduled post
+        content: New content (optional)
+        scheduled_time: New ISO format datetime (optional)
+        visibility: New visibility (optional)
+
+    Returns the updated scheduled post.
+    """
+    from datetime import datetime
+
+    from linkedin_mcp.services.scheduler import get_post_manager
+
+    manager = get_post_manager()
+
+    # Parse scheduled time if provided
+    scheduled_dt = None
+    if scheduled_time:
+        try:
+            scheduled_dt = datetime.fromisoformat(scheduled_time.replace("Z", "+00:00"))
+        except ValueError as e:
+            return {"error": f"Invalid datetime format: {e}"}
+
+    post = manager.update_scheduled_post(
+        job_id=job_id,
+        content=content,
+        scheduled_time=scheduled_dt,
+        visibility=visibility,
+    )
+
+    if not post:
+        return {"error": f"Cannot update post: {job_id}. Post may not exist or is not pending."}
+
+    return {"success": True, "scheduled_post": post}
+
+
+# =============================================================================
 # Engagement Tools
 # =============================================================================
 
