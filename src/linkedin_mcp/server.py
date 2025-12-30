@@ -937,6 +937,267 @@ async def comment_on_post(post_urn: str, text: str) -> dict:
         return {"error": str(e)}
 
 
+@mcp.tool()
+async def reply_to_comment(comment_urn: str, text: str) -> dict:
+    """
+    Reply to a comment on a LinkedIn post.
+
+    Args:
+        comment_urn: LinkedIn comment URN
+        text: Reply text
+
+    Returns the created reply details.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    if not text.strip():
+        return {"error": "Reply text cannot be empty"}
+
+    try:
+        result = await ctx.linkedin_client.reply_to_comment(comment_urn, text)
+        return {"success": True, "reply": result}
+    except Exception as e:
+        logger.error("Failed to reply to comment", error=str(e), comment_urn=comment_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def unreact_to_post(post_urn: str) -> dict:
+    """
+    Remove reaction from a LinkedIn post.
+
+    Args:
+        post_urn: LinkedIn post URN
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        await ctx.linkedin_client.unreact_to_post(post_urn)
+        return {"success": True, "message": "Reaction removed"}
+    except Exception as e:
+        logger.error("Failed to remove reaction", error=str(e), post_urn=post_urn)
+        return {"error": str(e)}
+
+
+# =============================================================================
+# Connection Management Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def send_connection_request(profile_id: str, message: str | None = None) -> dict:
+    """
+    Send a connection request to a LinkedIn user.
+
+    Args:
+        profile_id: LinkedIn public ID
+        message: Optional personalized message (max 300 characters)
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    # Validate message length
+    if message and len(message) > 300:
+        return {"error": "Connection message cannot exceed 300 characters"}
+
+    try:
+        result = await ctx.linkedin_client.send_connection_request(profile_id, message=message)
+        return {"success": True, "result": result, "profile_id": profile_id}
+    except Exception as e:
+        logger.error("Failed to send connection request", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def remove_connection(profile_id: str) -> dict:
+    """
+    Remove a LinkedIn connection.
+
+    Args:
+        profile_id: LinkedIn public ID of the connection to remove
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        result = await ctx.linkedin_client.remove_connection(profile_id)
+        return {"success": True, "result": result, "profile_id": profile_id}
+    except Exception as e:
+        logger.error("Failed to remove connection", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_pending_invitations(sent: bool = False) -> dict:
+    """
+    Get pending connection invitations.
+
+    Args:
+        sent: If True, get invitations you sent; otherwise get received invitations
+
+    Returns list of pending invitations.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        invitations = await ctx.linkedin_client.get_pending_invitations(sent=sent)
+        return {
+            "success": True,
+            "invitations": invitations,
+            "count": len(invitations),
+            "type": "sent" if sent else "received",
+        }
+    except Exception as e:
+        logger.error("Failed to fetch invitations", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def accept_invitation(invitation_id: str, shared_secret: str) -> dict:
+    """
+    Accept a connection invitation.
+
+    Args:
+        invitation_id: Invitation ID from get_pending_invitations
+        shared_secret: Shared secret from the invitation
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        result = await ctx.linkedin_client.accept_invitation(invitation_id, shared_secret)
+        return {"success": True, "result": result}
+    except Exception as e:
+        logger.error("Failed to accept invitation", error=str(e), invitation_id=invitation_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def reject_invitation(invitation_id: str, shared_secret: str) -> dict:
+    """
+    Reject/ignore a connection invitation.
+
+    Args:
+        invitation_id: Invitation ID from get_pending_invitations
+        shared_secret: Shared secret from the invitation
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        result = await ctx.linkedin_client.reject_invitation(invitation_id, shared_secret)
+        return {"success": True, "result": result}
+    except Exception as e:
+        logger.error("Failed to reject invitation", error=str(e), invitation_id=invitation_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def send_bulk_messages(profile_ids: str, text: str) -> dict:
+    """
+    Send a message to multiple LinkedIn connections.
+
+    Args:
+        profile_ids: Comma-separated list of profile public IDs (max 25)
+        text: Message content
+
+    Returns success/failure status for each recipient.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    if not text.strip():
+        return {"error": "Message text cannot be empty"}
+
+    # Parse and validate IDs
+    ids = [p.strip() for p in profile_ids.split(",") if p.strip()]
+    if not ids:
+        return {"error": "No profile IDs provided"}
+
+    if len(ids) > 25:
+        return {"error": "Maximum 25 recipients per bulk message"}
+
+    results = []
+    errors = []
+
+    for profile_id in ids:
+        try:
+            await ctx.linkedin_client.send_message([profile_id], text)
+            results.append({"profile_id": profile_id, "success": True})
+        except Exception as e:
+            logger.warning("Failed to send message", profile_id=profile_id, error=str(e))
+            errors.append({"profile_id": profile_id, "error": str(e)})
+
+    return {
+        "success": len(errors) == 0,
+        "sent": results,
+        "failed": errors,
+        "total_sent": len(results),
+        "total_failed": len(errors),
+    }
+
+
 # =============================================================================
 # Messaging Tools
 # =============================================================================

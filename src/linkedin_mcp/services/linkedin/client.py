@@ -322,6 +322,90 @@ class LinkedInClient:
         logger.info("Commenting on post", post_urn=post_urn)
         return await self._execute(self._client.comment_on_post, post_urn, text)
 
+    async def reply_to_comment(
+        self,
+        comment_urn: str,
+        text: str,
+    ) -> dict[str, Any]:
+        """Reply to a comment."""
+        logger.info("Replying to comment", comment_urn=comment_urn)
+        # LinkedIn API uses post_comment on the comment URN for replies
+        return await self._execute(self._client.comment_on_post, comment_urn, text)
+
+    async def unreact_to_post(self, post_urn: str) -> None:
+        """Remove reaction from a post."""
+        logger.info("Removing reaction from post", post_urn=post_urn)
+        await self._execute(self._client.unpost_react, post_urn)
+
+    # ==========================================================================
+    # Connection Methods
+    # ==========================================================================
+
+    async def send_connection_request(
+        self,
+        public_id: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Send a connection request to a profile.
+
+        Args:
+            public_id: LinkedIn public ID
+            message: Optional personalized message
+
+        Returns:
+            Request result
+        """
+        logger.info("Sending connection request", public_id=public_id)
+        return await self._execute(
+            self._client.add_connection,
+            public_id,
+            message=message,
+        )
+
+    async def remove_connection(self, public_id: str) -> dict[str, Any]:
+        """Remove a connection."""
+        logger.info("Removing connection", public_id=public_id)
+        return await self._execute(self._client.remove_connection, public_id)
+
+    async def get_pending_invitations(
+        self,
+        sent: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        Get pending connection invitations.
+
+        Args:
+            sent: If True, get sent invitations; otherwise get received
+
+        Returns:
+            List of pending invitations
+        """
+        logger.info("Fetching invitations", sent=sent)
+        if sent:
+            return await self._execute(self._client.get_invitations, inviter_id=None)
+        return await self._execute(self._client.get_invitations)
+
+    async def accept_invitation(self, invitation_id: str, shared_secret: str) -> dict[str, Any]:
+        """Accept a connection invitation."""
+        logger.info("Accepting invitation", invitation_id=invitation_id)
+        return await self._execute(
+            self._client.reply_invitation,
+            invitation_id,
+            shared_secret,
+            action="accept",
+        )
+
+    async def reject_invitation(self, invitation_id: str, shared_secret: str) -> dict[str, Any]:
+        """Reject a connection invitation."""
+        logger.info("Rejecting invitation", invitation_id=invitation_id)
+        return await self._execute(
+            self._client.reply_invitation,
+            invitation_id,
+            shared_secret,
+            action="ignore",
+        )
+
     # ==========================================================================
     # Messaging Methods
     # ==========================================================================
