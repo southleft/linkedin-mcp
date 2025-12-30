@@ -21,14 +21,13 @@ from linkedin_mcp.core.logging import configure_logging, get_logger
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from linkedin_api import Linkedin
     from playwright.async_api import Browser, BrowserContext
     from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = get_logger(__name__)
 
 
-async def init_linkedin_client(settings: Settings) -> "Linkedin | None":
+async def init_linkedin_client(settings: Settings) -> Any:
     """
     Initialize the LinkedIn API client.
 
@@ -36,40 +35,21 @@ async def init_linkedin_client(settings: Settings) -> "Linkedin | None":
         settings: Application settings
 
     Returns:
-        Initialized LinkedIn client or None if authentication fails
+        Initialized LinkedInClient wrapper
     """
+    from linkedin_mcp.services.linkedin import LinkedInClient
+
     try:
         logger.info("Initializing LinkedIn client")
 
-        # Check for existing session cookies
-        cookie_path = settings.session_cookie_path
-        cookies = None
-
-        if cookie_path.exists():
-            import json
-            try:
-                with cookie_path.open() as f:
-                    cookies = json.load(f)
-                logger.info("Loaded existing session cookies")
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning("Failed to load cookies, will authenticate fresh", error=str(e))
-
-        # Initialize client (runs in thread pool since it's sync)
-        def create_client() -> Any:
-            from linkedin_api import Linkedin as LinkedinClient
-            return LinkedinClient(
-                settings.linkedin.email,
-                settings.linkedin.password.get_secret_value(),
-                cookies=cookies,
-                refresh_cookies=True,
-            )
-
-        client = await asyncio.get_event_loop().run_in_executor(
-            None, create_client
+        client = LinkedInClient(
+            email=settings.linkedin.email,
+            password=settings.linkedin.password.get_secret_value(),
+            cookie_path=settings.session_cookie_path,
+            rate_limit=settings.rate_limit.requests_per_minute * 60,  # Convert to hourly
         )
 
-        # Save cookies for future sessions
-        await save_session_cookies(client, cookie_path)
+        await client.initialize()
 
         logger.info("LinkedIn client initialized successfully")
         return client
@@ -82,21 +62,6 @@ async def init_linkedin_client(settings: Settings) -> "Linkedin | None":
         ) from e
 
 
-async def save_session_cookies(client: "Linkedin", cookie_path: Path) -> None:
-    """Save session cookies for persistence."""
-    import json
-
-    try:
-        cookie_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Extract cookies from client session
-        if hasattr(client, "client") and hasattr(client.client, "cookies"):
-            cookies = dict(client.client.cookies)
-            with cookie_path.open("w") as f:
-                json.dump(cookies, f)
-            logger.debug("Session cookies saved")
-    except Exception as e:
-        logger.warning("Failed to save session cookies", error=str(e))
 
 
 async def init_database(settings: Settings) -> "AsyncEngine | None":
@@ -260,13 +225,13 @@ async def shutdown_services(ctx: AppContext) -> None:
         except Exception as e:
             logger.warning("Error closing database", error=str(e))
 
-    # Save LinkedIn session
+    # Close LinkedIn client
     if ctx.linkedin_client:
-        logger.debug("Saving LinkedIn session")
-        await save_session_cookies(
-            ctx.linkedin_client,
-            ctx.settings.session_cookie_path,
-        )
+        logger.debug("Closing LinkedIn client")
+        try:
+            await ctx.linkedin_client.close()
+        except Exception as e:
+            logger.warning("Error closing LinkedIn client", error=str(e))
 
     logger.info("All services shut down")
 
