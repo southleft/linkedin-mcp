@@ -116,30 +116,61 @@ python -m linkedin_mcp.main
 
 ## Available Tools
 
+### Authentication
+- `check_auth_status()` - Check authentication status
+- `login()` - Authenticate with LinkedIn
+
 ### Profile Tools
-- `get_my_profile()` - Get your LinkedIn profile
+- `get_own_profile()` - Get your LinkedIn profile
 - `get_profile(profile_id)` - Get any profile by ID
+- `get_profile_sections()` - View editable profile sections
+- `get_profile_completeness()` - Calculate profile completeness score
+- `update_profile_headline(headline)` - Update headline (browser)
+- `update_profile_summary(summary)` - Update about section (browser)
+- `upload_profile_photo(path)` - Upload profile photo (browser)
+- `upload_background_photo(path)` - Upload banner photo (browser)
+- `add_profile_skill(skill)` - Add a skill (browser)
 
 ### Feed & Posts
 - `get_feed(limit)` - Get your feed posts
 - `get_profile_posts(profile_id, limit)` - Get posts from a profile
+- `get_post_details(post_urn)` - Get detailed post information
+- `get_post_reactions(post_urn)` - Get reactions on a post
+- `get_post_comments(post_urn)` - Get comments on a post
+
+### Content Creation
 - `create_post(text, visibility)` - Create a new post
+- `schedule_post(content, time, visibility)` - Schedule a post
+- `list_scheduled_posts(status)` - View scheduled posts
+- `cancel_scheduled_post(job_id)` - Cancel a scheduled post
+- `create_draft(content, title, tags)` - Save a content draft
+- `list_drafts(tag)` - List content drafts
+- `analyze_draft(content)` - Get content improvement suggestions
 
 ### Engagement
-- `get_post_reactions(post_urn)` - Get reactions on a post
-- `like_post(post_urn)` - Like a post
+- `react_to_post(post_urn, reaction_type)` - React to a post
+- `unreact_to_post(post_urn)` - Remove reaction from a post
 - `comment_on_post(post_urn, text)` - Comment on a post
+- `reply_to_comment(comment_urn, text)` - Reply to a comment
 
-### Messaging
-- `get_conversations(limit)` - Get your conversations
-- `send_message(profile_id, text)` - Send a message
+### Messaging & Connections
+- `send_message(profile_id, text)` - Send a direct message
+- `send_bulk_messages(profile_ids, text)` - Send to multiple recipients
+- `get_connections(limit)` - Get your connections
+- `send_connection_request(profile_id, message)` - Send connection invite
+- `remove_connection(profile_id)` - Remove a connection
+- `get_pending_invitations(sent)` - View pending invites
+- `accept_invitation(id, secret)` - Accept connection request
+- `reject_invitation(id, secret)` - Reject connection request
 
 ### Search
-- `search_people(keywords, limit)` - Search for people
-- `get_connections(limit)` - Get your connections
+- `search_linkedin(keywords, type, limit)` - Search people, jobs, companies
 
 ### Analytics
-- `get_post_analytics(post_urn)` - Get engagement metrics
+- `analyze_post_engagement(reactions, comments, shares)` - Engagement metrics
+- `analyze_content(content)` - Content optimization analysis
+- `analyze_posting_patterns(posts)` - Find optimal posting times
+- `get_cache_stats()` - View cache performance statistics
 
 ## Architecture
 

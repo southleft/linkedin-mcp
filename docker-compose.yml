@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  linkedin-mcp:
+    build: .
+    container_name: linkedin-mcp-server
+    restart: unless-stopped
+    environment:
+      - LINKEDIN_USERNAME=${LINKEDIN_USERNAME}
+      - LINKEDIN_PASSWORD=${LINKEDIN_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - ENABLE_BROWSER_FALLBACK=${ENABLE_BROWSER_FALLBACK:-false}
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-300}
+    volumes:
+      - ./data:/app/data
+      - ./cookies:/app/cookies
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: LinkedIn MCP with Playwright support
+  linkedin-mcp-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    container_name: linkedin-mcp-browser
+    restart: unless-stopped
+    environment:
+      - LINKEDIN_USERNAME=${LINKEDIN_USERNAME}
+      - LINKEDIN_PASSWORD=${LINKEDIN_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - ENABLE_BROWSER_FALLBACK=true
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-300}
+    volumes:
+      - ./data:/app/data
+      - ./cookies:/app/cookies
+      - ./browser-state:/app/browser-state
+    ports:
+      - "8001:8000"
+    profiles:
+      - browser

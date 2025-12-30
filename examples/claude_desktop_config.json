@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "linkedin": {
+      "command": "uv",
+      "args": ["run", "linkedin-mcp"],
+      "cwd": "/path/to/linkedin-mcp",
+      "env": {
+        "LINKEDIN_EMAIL": "your-email@example.com",
+        "LINKEDIN_PASSWORD": "your-password",
+        "LOG_LEVEL": "INFO",
+        "ENABLE_BROWSER_FALLBACK": "false"
+      }
+    }
+  }
+}
