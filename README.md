@@ -105,8 +105,9 @@ python scripts/export_cookies.py
 
 Add to your Claude Desktop configuration file:
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -156,53 +157,81 @@ If you see "LinkedIn client not initialized", check:
 ### Available Tools
 
 #### Diagnostic
-- `debug_context()` - Check server initialization status
+- `debug_context()` - Check server initialization status and configuration
 
 #### Profile Tools
 - `get_my_profile()` - Get your LinkedIn profile
-- `get_profile(profile_id)` - Get any profile by ID
+- `get_profile(profile_id)` - Get any profile by public ID
+- `get_profile_contact_info(profile_id)` - Get contact information
+- `get_profile_skills(profile_id)` - Get skills and endorsements
 - `get_profile_sections()` - View editable profile sections
 - `get_profile_completeness()` - Calculate profile completeness score
+- `get_network_stats()` - Get network size and demographics
+- `batch_get_profiles(profile_ids)` - Get multiple profiles efficiently
+
+#### Profile Management (requires browser automation)
+- `update_profile_headline(headline)` - Update your headline
+- `update_profile_summary(summary)` - Update your about section
+- `upload_profile_photo(photo_path)` - Upload profile photo
+- `upload_background_photo(photo_path)` - Upload banner photo
+- `add_profile_skill(skill_name)` - Add a skill
+- `check_browser_automation_status()` - Check browser availability
 
 #### Feed & Posts
 - `get_feed(limit)` - Get your feed posts
 - `get_profile_posts(profile_id, limit)` - Get posts from a profile
-- `get_post_details(post_urn)` - Get detailed post information
+- `create_post(text, visibility)` - Create a new post
 - `get_post_reactions(post_urn)` - Get reactions on a post
 - `get_post_comments(post_urn)` - Get comments on a post
 
-#### Content Creation
-- `create_post(text, visibility)` - Create a new post
-- `schedule_post(content, time, visibility)` - Schedule a post
-- `list_scheduled_posts(status)` - View scheduled posts
-- `cancel_scheduled_post(job_id)` - Cancel a scheduled post
+#### Content Creation & Scheduling
+- `analyze_draft_content(content, industry)` - Analyze content with suggestions
 - `create_draft(content, title, tags)` - Save a content draft
 - `list_drafts(tag)` - List content drafts
-- `analyze_draft(content)` - Get content improvement suggestions
+- `get_draft(draft_id)` - Get a specific draft
+- `update_draft(draft_id, content, title, tags)` - Update a draft
+- `delete_draft(draft_id)` - Delete a draft
+- `publish_draft(draft_id, visibility)` - Publish a draft as a post
+- `schedule_post(content, scheduled_time, visibility, timezone)` - Schedule a post
+- `list_scheduled_posts(status)` - View scheduled posts
+- `get_scheduled_post(job_id)` - Get scheduled post details
+- `update_scheduled_post(job_id, ...)` - Update a scheduled post
+- `cancel_scheduled_post(job_id)` - Cancel a scheduled post
 
 #### Engagement
-- `react_to_post(post_urn, reaction_type)` - React to a post
+- `like_post(post_urn)` - Like a post
+- `react_to_post(post_urn, reaction)` - React with LIKE, CELEBRATE, SUPPORT, LOVE, INSIGHTFUL, or FUNNY
 - `unreact_to_post(post_urn)` - Remove reaction from a post
 - `comment_on_post(post_urn, text)` - Comment on a post
 - `reply_to_comment(comment_urn, text)` - Reply to a comment
 
-#### Messaging & Connections
+#### Messaging
+- `get_conversations(limit)` - Get messaging conversations
+- `get_conversation(conversation_id)` - Get full conversation history
 - `send_message(profile_id, text)` - Send a direct message
-- `send_bulk_messages(profile_ids, text)` - Send to multiple recipients
+- `send_bulk_messages(profile_ids, text)` - Send to multiple recipients (max 25)
+
+#### Connections
 - `get_connections(limit)` - Get your connections
 - `send_connection_request(profile_id, message)` - Send connection invite
 - `remove_connection(profile_id)` - Remove a connection
 - `get_pending_invitations(sent)` - View pending invites
-- `accept_invitation(id, secret)` - Accept connection request
-- `reject_invitation(id, secret)` - Reject connection request
+- `accept_invitation(invitation_id, shared_secret)` - Accept connection request
+- `reject_invitation(invitation_id, shared_secret)` - Reject connection request
 
 #### Search
-- `search_linkedin(keywords, type, limit)` - Search people, jobs, companies
+- `search_people(keywords, limit, connection_of, current_company)` - Search for people
+- `search_companies(keywords, limit)` - Search for companies
 
 #### Analytics
-- `analyze_post_engagement(reactions, comments, shares)` - Engagement metrics
-- `analyze_content(content)` - Content optimization analysis
-- `analyze_posting_patterns(posts)` - Find optimal posting times
+- `get_post_analytics(post_urn)` - Get engagement metrics for a post
+- `analyze_engagement(post_urn, follower_count)` - Deep engagement analysis
+- `analyze_content_performance(profile_id, post_limit)` - Content type analysis
+- `analyze_optimal_posting_times(profile_id, post_limit)` - Best times to post
+- `analyze_post_audience(post_urn)` - Audience demographics from commenters
+- `analyze_hashtag_performance(profile_id, post_limit)` - Hashtag effectiveness
+- `generate_engagement_report(profile_id, post_limit)` - Comprehensive engagement report
+- `get_rate_limit_status()` - Check API rate limit status
 - `get_cache_stats()` - View cache performance statistics
 
 ## Architecture
@@ -274,9 +303,17 @@ LinkedIn session cookies typically last 1-2 weeks. If you're getting authenticat
 
 ### MCP server logs
 
-View server logs on macOS:
+View server logs:
+
 ```bash
+# macOS
 tail -f ~/Library/Logs/Claude/mcp-server-linkedin.log
+
+# Windows (PowerShell)
+Get-Content -Path "$env:APPDATA\Claude\logs\mcp-server-linkedin.log" -Wait
+
+# Linux
+tail -f ~/.config/Claude/logs/mcp-server-linkedin.log
 ```
 
 ## Security Notice
