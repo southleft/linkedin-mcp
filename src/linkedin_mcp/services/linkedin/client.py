@@ -89,41 +89,85 @@ class LinkedInClient:
     - Session cookie persistence
     - Rate limiting
     - Retry logic with exponential backoff
+
+    Authentication methods (in priority order):
+    1. Direct cookies dict (safest, recommended via linkedin-mcp-auth)
+    2. Cookie path file (legacy)
+    3. Email/password (may cause session issues, not recommended)
     """
 
     def __init__(
         self,
-        email: str,
-        password: str,
+        email: str | None = None,
+        password: str | None = None,
         cookie_path: Path | None = None,
+        cookies: dict[str, str] | None = None,
         rate_limit: int = MAX_REQUESTS_PER_HOUR,
     ):
+        """
+        Initialize LinkedIn client.
+
+        Args:
+            email: LinkedIn email (optional if using cookies)
+            password: LinkedIn password (optional if using cookies)
+            cookie_path: Path to cookie file (optional)
+            cookies: Direct cookies dict with li_at and optionally JSESSIONID
+            rate_limit: Max requests per hour
+        """
         self.email = email
         self.password = password
         self.cookie_path = cookie_path or Path("./data/session_cookies.json")
+        self._direct_cookies = cookies  # New: direct cookies from keychain
         self.rate_limiter = RateLimiter(max_requests=rate_limit)
         self._client: Any = None
         self._initialized = False
 
     async def initialize(self) -> None:
-        """Initialize the LinkedIn client with authentication."""
+        """
+        Initialize the LinkedIn client with authentication.
+
+        Authentication priority:
+        1. Direct cookies (from keychain, safest)
+        2. Cookie file (legacy)
+        3. Email/password (may cause session issues)
+        """
         if self._initialized:
             logger.info("LinkedIn client already initialized, skipping")
             return
 
-        logger.info(
-            "Starting LinkedIn client initialization",
-            cookie_path=str(self.cookie_path),
-            cookie_path_exists=self.cookie_path.exists(),
-        )
+        # Priority 1: Use direct cookies from keychain
+        cookies = None
+        auth_method = "unknown"
 
-        cookies = await self._load_cookies()
+        if self._direct_cookies:
+            logger.info(
+                "Using direct cookies from keychain",
+                has_li_at="li_at" in self._direct_cookies,
+                has_jsessionid="JSESSIONID" in self._direct_cookies,
+            )
+            # Convert dict to RequestsCookieJar
+            cookie_jar = RequestsCookieJar()
+            for name, value in self._direct_cookies.items():
+                if value:  # Only add non-empty cookies
+                    cookie_jar.set(name, value, domain=".linkedin.com", path="/")
+            cookies = cookie_jar
+            auth_method = "keychain_cookies"
+        else:
+            # Priority 2: Load from cookie file
+            logger.info(
+                "No direct cookies, checking cookie file",
+                cookie_path=str(self.cookie_path),
+                cookie_path_exists=self.cookie_path.exists(),
+            )
+            cookies = await self._load_cookies()
+            auth_method = "cookie_file" if cookies else "credentials"
 
         logger.info(
-            "Cookies loaded for initialization",
+            "Cookies prepared for initialization",
             has_cookies=cookies is not None,
             cookie_type=type(cookies).__name__ if cookies else None,
             cookie_count=len(cookies) if cookies else 0,
+            auth_method=auth_method,
         )
 
         def create_client() -> Any:
@@ -133,21 +177,22 @@ class LinkedInClient:
                 "Creating LinkedIn client in executor",
                 has_cookies=cookies is not None,
                 cookie_count=len(cookies) if cookies else 0,
-                cookie_type=type(cookies).__name__ if cookies else None,
+                auth_method=auth_method,
             )
 
-            # Log the actual call parameters
-            logger.info(
-                "Calling Linkedin constructor",
-                email=self.email,
-                password_length=len(self.password) if self.password else 0,
-                cookies_provided=cookies is not None,
-                refresh_cookies=True,
-            )
+            # If using cookies only (no password), use empty credentials
+            email = self.email or ""
+            password = self.password or ""
+
+            # If we have cookies, we might not need credentials
+            if cookies and not self.email:
+                logger.info(
+                    "Using cookie-only authentication (recommended)",
+                )
 
             client = Linkedin(
-                self.email,
-                self.password,
+                email,
+                password,
                 cookies=cookies,
                 refresh_cookies=True,
             )
@@ -160,21 +205,22 @@ class LinkedInClient:
             return client
 
         try:
-            logger.info("Running create_client in executor")
+            logger.info("Running create_client in executor", auth_method=auth_method)
             self._client = await asyncio.get_event_loop().run_in_executor(
                 None, create_client
             )
             self._initialized = True
 
             logger.info(
-                "Client initialized, saving cookies",
+                "Client initialized successfully",
                 client_type=type(self._client).__name__,
+                auth_method=auth_method,
             )
 
-            # Save refreshed cookies
-            await self._save_cookies()
-
-            logger.info("LinkedIn client initialized successfully")
+            # Save refreshed cookies (only if using file-based auth)
+            if auth_method != "keychain_cookies":
+                await self._save_cookies()
+                logger.debug("Session cookies saved")
 
         except Exception as e:
             import traceback
@@ -182,6 +228,7 @@ class LinkedInClient:
                 "LinkedIn authentication failed",
                 error=str(e),
                 error_type=type(e).__name__,
+                auth_method=auth_method,
                 traceback=traceback.format_exc(),
             )
             raise LinkedInAuthError(
@@ -217,7 +264,12 @@ class LinkedInClient:
             return None
 
     async def _save_cookies(self) -> None:
-        """Save session cookies to file."""
+        """Save session cookies to file, preserving existing browser cookies.
+
+        This method merges refreshed cookies with existing ones to preserve
+        browser-set cookies (bcookie, lidc, bscookie, etc.) that are required
+        for full API access.
+        """
         if not self._client:
             return
 
@@ -225,14 +277,35 @@ class LinkedInClient:
             self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
 
             if hasattr(self._client, "client") and hasattr(self._client.client, "cookies"):
-                cookies = dict(self._client.client.cookies)
+                new_cookies = dict(self._client.client.cookies)
 
-                def write_cookies() -> None:
-                    with self.cookie_path.open("w") as f:
-                        json.dump(cookies, f)
+                # Load existing cookies to preserve browser-set cookies
+                existing_cookies = {}
+                if self.cookie_path.exists():
+                    try:
+                        content = await asyncio.get_event_loop().run_in_executor(
+                            None, lambda: self.cookie_path.read_text()
+                        )
+                        existing_cookies = json.loads(content)
+                    except (json.JSONDecodeError, OSError):
+                        pass
 
-                await asyncio.get_event_loop().run_in_executor(None, write_cookies)
-                logger.debug("Session cookies saved")
+                # Merge: existing cookies as base, update with new/refreshed cookies
+                merged_cookies = {**existing_cookies, **new_cookies}
+
+                # Only save if we have cookies to save
+                if merged_cookies:
+                    def write_cookies() -> None:
+                        with self.cookie_path.open("w") as f:
+                            json.dump(merged_cookies, f)
+
+                    await asyncio.get_event_loop().run_in_executor(None, write_cookies)
+                    logger.debug(
+                        "Session cookies saved",
+                        existing_count=len(existing_cookies),
+                        new_count=len(new_cookies),
+                        merged_count=len(merged_cookies),
+                    )
 
         except Exception as e:
             logger.warning("Failed to save cookies", error=str(e))
@@ -552,6 +625,178 @@ class LinkedInClient:
             self._client.search_companies,
             keywords=keywords,
             limit=limit,
+        )
+
+    # ==========================================================================
+    # Company Methods
+    # ==========================================================================
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_company(self, public_id: str) -> dict[str, Any]:
+        """
+        Get detailed company information.
+
+        Args:
+            public_id: Company's public identifier (from URL slug)
+
+        Returns:
+            Company details including description, industry, size, etc.
+        """
+        logger.info("Fetching company", public_id=public_id)
+        return await self._execute(self._client.get_company, public_id)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_company_updates(
+        self,
+        public_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Get recent posts/updates from a company.
+
+        Args:
+            public_id: Company's public identifier
+            limit: Maximum number of updates to retrieve
+
+        Returns:
+            List of company posts/updates
+        """
+        logger.info("Fetching company updates", public_id=public_id, limit=limit)
+        return await self._execute(
+            self._client.get_company_updates,
+            public_id,
+            max_results=limit,
+        )
+
+    # ==========================================================================
+    # Lead Generation Methods
+    # ==========================================================================
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_profile_contact_info(self, public_id: str) -> dict[str, Any]:
+        """
+        Get contact information for a profile.
+
+        Args:
+            public_id: Profile's public identifier
+
+        Returns:
+            Contact info including email, phone, websites, etc.
+        """
+        logger.info("Fetching profile contact info", public_id=public_id)
+        return await self._execute(self._client.get_profile_contact_info, public_id)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_profile_skills(self, public_id: str) -> list[dict[str, Any]]:
+        """
+        Get skills listed on a profile.
+
+        Args:
+            public_id: Profile's public identifier
+
+        Returns:
+            List of skills with endorsement counts
+        """
+        logger.info("Fetching profile skills", public_id=public_id)
+        return await self._execute(self._client.get_profile_skills, public_id)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_school(self, public_id: str) -> dict[str, Any]:
+        """
+        Get school/university information.
+
+        Args:
+            public_id: School's public identifier
+
+        Returns:
+            School details
+        """
+        logger.info("Fetching school", public_id=public_id)
+        return await self._execute(self._client.get_school, public_id)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_invitations(
+        self,
+        limit: int = 20,
+        start: int = 0,
+    ) -> list[dict[str, Any]]:
+        """
+        Get pending connection invitations.
+
+        Args:
+            limit: Maximum invitations to retrieve
+            start: Pagination offset
+
+        Returns:
+            List of pending invitations
+        """
+        logger.info("Fetching invitations", limit=limit, start=start)
+        return await self._execute(
+            self._client.get_invitations,
+            start=start,
+            limit=limit,
+        )
+
+    async def send_invitation(
+        self,
+        profile_public_id: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Send a connection invitation to a profile.
+
+        Args:
+            profile_public_id: Target profile's public ID
+            message: Optional personalized message (max 300 chars)
+
+        Returns:
+            Invitation result
+        """
+        logger.info("Sending invitation", profile_id=profile_public_id)
+        return await self._execute(
+            self._client.add_connection,
+            profile_public_id,
+            message=message,
+        )
+
+    async def withdraw_invitation(self, invitation_id: str) -> dict[str, Any]:
+        """
+        Withdraw a pending connection invitation.
+
+        Args:
+            invitation_id: ID of the invitation to withdraw
+
+        Returns:
+            Withdrawal result
+        """
+        logger.info("Withdrawing invitation", invitation_id=invitation_id)
+        return await self._execute(
+            self._client.remove_connection,
+            invitation_id,
         )
 
     # ==========================================================================

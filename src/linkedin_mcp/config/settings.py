@@ -31,6 +31,7 @@ PROJECT_ROOT = _get_project_root()
 class LinkedInSettings(BaseSettings):
     """LinkedIn API credentials and settings."""
 
+    # Unofficial API credentials (tomquirk/linkedin-api)
     email: str | None = Field(default=None, description="LinkedIn account email")
     password: SecretStr | None = Field(default=None, description="LinkedIn account password")
     api_enabled: bool = Field(
@@ -38,7 +39,21 @@ class LinkedInSettings(BaseSettings):
         description="Enable linkedin-api library (may cause session issues)",
     )
 
-    model_config = SettingsConfigDict(env_prefix="LINKEDIN_")
+    # Official OAuth 2.0 credentials (from LinkedIn Developer Portal)
+    client_id: SecretStr | None = Field(
+        default=None,
+        description="LinkedIn OAuth App Client ID",
+    )
+    client_secret: SecretStr | None = Field(
+        default=None,
+        description="LinkedIn OAuth App Client Secret",
+    )
+    redirect_uri: str = Field(
+        default="http://localhost:8765/callback",
+        description="OAuth callback URL (must match Developer Portal)",
+    )
+
+    model_config = SettingsConfigDict(env_prefix="LINKEDIN_", env_file=".env")
 
 
 class DatabaseSettings(BaseSettings):

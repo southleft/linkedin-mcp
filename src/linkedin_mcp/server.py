@@ -51,16 +51,23 @@ async def debug_context() -> dict:
             except Exception as e:
                 cookie_content = f"Error reading: {e}"
 
+        # Get official client status if available
+        official_status = None
+        if ctx.official_client:
+            official_status = ctx.official_client.debug_context()
+
         return {
             "success": True,
             "context": {
                 "is_initialized": ctx.is_initialized,
+                "has_official_client": ctx.has_official_client,
                 "has_linkedin_client": ctx.has_linkedin_client,
                 "has_database": ctx.has_database,
                 "has_scheduler": ctx.has_scheduler,
                 "has_browser": ctx.has_browser,
                 "linkedin_client_type": type(ctx.linkedin_client).__name__ if ctx.linkedin_client else None,
             },
+            "official_api": official_status,
             "settings": {
                 "api_enabled": settings.linkedin.api_enabled,
                 "email": settings.linkedin.email,
@@ -98,11 +105,12 @@ async def get_my_profile() -> dict:
     """
     Get the authenticated user's LinkedIn profile.
 
-    Returns comprehensive profile data including:
-    - Basic info (name, headline, location)
-    - Experience and education
-    - Skills and endorsements
-    - Contact information
+    Returns profile data including:
+    - Basic info (name, email, picture)
+    - LinkedIn member ID
+
+    Uses the Official LinkedIn API (OAuth 2.0) when available for reliable results.
+    Falls back to unofficial API if official client is not configured.
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
@@ -110,15 +118,25 @@ async def get_my_profile() -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
+    # Prefer Official API - it's reliable and works consistently
+    if ctx.has_official_client:
+        try:
+            profile = ctx.official_client.get_my_profile()
+            if profile:
+                return {"success": True, "profile": profile, "source": "official_api"}
+        except Exception as e:
+            logger.warning("Official API failed, trying unofficial", error=str(e))
 
-    try:
-        profile = await ctx.linkedin_client.get_own_profile()
-        return {"success": True, "profile": profile}
-    except Exception as e:
-        logger.error("Failed to fetch profile", error=str(e))
-        return {"error": str(e)}
+    # Fall back to unofficial API
+    if ctx.linkedin_client:
+        try:
+            profile = await ctx.linkedin_client.get_own_profile()
+            return {"success": True, "profile": profile, "source": "unofficial_api"}
+        except Exception as e:
+            logger.error("Failed to fetch profile from unofficial API", error=str(e))
+            return {"error": str(e)}
+
+    return {"error": "No LinkedIn client available. Configure OAuth token or session cookies."}
 
 
 @mcp.tool()
@@ -467,36 +485,314 @@ async def get_profile_posts(profile_id: str, limit: int = 10, use_cache: bool = 
 @mcp.tool()
 async def create_post(text: str, visibility: str = "PUBLIC") -> dict:
     """
-    Create a new LinkedIn post.
+    Create a new LinkedIn post using the Official API (recommended) or unofficial API.
+
+    Uses the Official LinkedIn API with w_member_social scope when available.
+    This is the TOS-compliant method that requires enabling "Share on LinkedIn" product.
 
     Args:
         text: Post content (max 3000 characters)
-        visibility: Post visibility - PUBLIC, CONNECTIONS, or LOGGED_IN
+        visibility: Post visibility - PUBLIC or CONNECTIONS
 
-    Returns the created post details.
+    Returns the created post details including post URN.
     """
     from linkedin_mcp.config.constants import MAX_POST_LENGTH
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient, PostVisibility
 
     logger = get_logger(__name__)
     ctx = get_context()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     if len(text) > MAX_POST_LENGTH:
         return {"error": f"Post exceeds maximum length of {MAX_POST_LENGTH} characters"}
 
-    if visibility not in ("PUBLIC", "CONNECTIONS", "LOGGED_IN"):
-        return {"error": "Invalid visibility. Must be PUBLIC, CONNECTIONS, or LOGGED_IN"}
+    # Map visibility
+    visibility_map = {
+        "PUBLIC": PostVisibility.PUBLIC,
+        "CONNECTIONS": PostVisibility.CONNECTIONS,
+        "LOGGED_IN": PostVisibility.CONNECTIONS,  # Map to CONNECTIONS for official API
+    }
+    if visibility.upper() not in visibility_map:
+        return {"error": "Invalid visibility. Must be PUBLIC or CONNECTIONS"}
+
+    # Prefer Official API - TOS compliant and reliable
+    if ctx.has_official_client:
+        try:
+            posts_client = LinkedInPostsClient(
+                access_token=ctx.official_client._access_token,
+                member_urn=None,  # Will be fetched automatically
+            )
+            result = posts_client.create_text_post(
+                text=text,
+                visibility=visibility_map[visibility.upper()],
+            )
+            if result and result.get("success"):
+                logger.info("Created post via Official API", post_urn=result.get("post_urn"))
+                return {"success": True, "post": result, "source": "official_api"}
+            else:
+                logger.warning("Official API post failed, trying unofficial", error=result.get("error"))
+        except Exception as e:
+            logger.warning("Official API failed, trying unofficial", error=str(e))
+
+    # Fall back to unofficial API
+    if ctx.linkedin_client:
+        try:
+            result = await ctx.linkedin_client.create_post(text, visibility=visibility)
+            return {"success": True, "post": result, "source": "unofficial_api"}
+        except Exception as e:
+            logger.error("Failed to create post via unofficial API", error=str(e))
+            return {"error": str(e)}
+
+    return {"error": "No LinkedIn client available. Configure OAuth token or session cookies."}
+
+
+@mcp.tool()
+async def create_image_post(text: str, image_path: str, alt_text: str | None = None, visibility: str = "PUBLIC") -> dict:
+    """
+    Create a LinkedIn post with an image using the Official API.
+
+    Requires "Share on LinkedIn" product enabled in your LinkedIn Developer app.
+
+    Args:
+        text: Post text content (max 3000 characters)
+        image_path: Absolute path to image file (JPG, PNG, GIF)
+        alt_text: Accessibility text describing the image (recommended)
+        visibility: Post visibility - PUBLIC or CONNECTIONS
+
+    Returns the created post details including post URN and image URN.
+    """
+    from pathlib import Path
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient, PostVisibility
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    # Validate image path
+    image_file = Path(image_path)
+    if not image_file.exists():
+        return {"error": f"Image file not found: {image_path}"}
+
+    valid_extensions = (".jpg", ".jpeg", ".png", ".gif")
+    if not image_file.suffix.lower() in valid_extensions:
+        return {"error": f"Invalid image format. Supported: {', '.join(valid_extensions)}"}
+
+    # Check official API availability
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required for image posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
+            "hint": "Enable 'Share on LinkedIn' product in your LinkedIn Developer app.",
+        }
+
+    visibility_enum = PostVisibility.PUBLIC if visibility.upper() == "PUBLIC" else PostVisibility.CONNECTIONS
 
     try:
-        result = await ctx.linkedin_client.create_post(text, visibility=visibility)
-        return {"success": True, "post": result}
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.create_image_post(
+            text=text,
+            image_path=image_file,
+            alt_text=alt_text,
+            visibility=visibility_enum,
+        )
+
+        if result and result.get("success"):
+            logger.info("Created image post", post_urn=result.get("post_urn"))
+            return {"success": True, "post": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
     except Exception as e:
-        logger.error("Failed to create post", error=str(e))
+        logger.error("Failed to create image post", error=str(e))
         return {"error": str(e)}
+
+
+@mcp.tool()
+async def create_poll(
+    question: str,
+    options: str,
+    duration_days: int = 7,
+    visibility: str = "PUBLIC",
+) -> dict:
+    """
+    Create a LinkedIn poll using the Official API.
+
+    Requires "Share on LinkedIn" product enabled in your LinkedIn Developer app.
+
+    Args:
+        question: Poll question (also displayed as post text, max 140 characters)
+        options: Comma-separated poll options (2-4 options, each max 140 characters)
+        duration_days: Poll duration - 1, 3, 7, or 14 days (default: 7)
+        visibility: Post visibility - PUBLIC or CONNECTIONS
+
+    Returns the created poll post details.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient, PostVisibility
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    # Parse options
+    option_list = [opt.strip() for opt in options.split(",") if opt.strip()]
+    if len(option_list) < 2 or len(option_list) > 4:
+        return {"error": "Poll must have 2-4 options (comma-separated)"}
+
+    # Validate duration
+    if duration_days not in (1, 3, 7, 14):
+        return {"error": "Poll duration must be 1, 3, 7, or 14 days"}
+
+    # Check official API availability
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required for polls. Run 'linkedin-mcp-auth oauth' to authenticate.",
+            "hint": "Enable 'Share on LinkedIn' product in your LinkedIn Developer app.",
+        }
+
+    visibility_enum = PostVisibility.PUBLIC if visibility.upper() == "PUBLIC" else PostVisibility.CONNECTIONS
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.create_poll(
+            question=question,
+            options=option_list,
+            duration_days=duration_days,
+            visibility=visibility_enum,
+        )
+
+        if result and result.get("success"):
+            logger.info("Created poll", post_urn=result.get("post_urn"))
+            return {"success": True, "poll": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to create poll", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def delete_post(post_urn: str) -> dict:
+    """
+    Delete a LinkedIn post using the Official API.
+
+    Requires "Share on LinkedIn" product enabled in your LinkedIn Developer app.
+
+    Args:
+        post_urn: The URN of the post to delete (e.g., "urn:li:share:123456")
+
+    Returns success status.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required to delete posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
+        }
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.delete_post(post_urn)
+
+        if result and result.get("success"):
+            logger.info("Deleted post", post_urn=post_urn)
+            return {"success": True, "message": f"Post {post_urn} deleted", "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to delete post", error=str(e), post_urn=post_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_auth_status() -> dict:
+    """
+    Get LinkedIn authentication status for both official and unofficial APIs.
+
+    Returns detailed status including:
+    - Official API status (OAuth token expiry, available features)
+    - Unofficial API status (cookie freshness, available features)
+    - Recommended actions if not authenticated
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.services.storage.token_storage import get_official_token, get_unofficial_cookies
+
+    ctx = get_context()
+
+    result = {
+        "success": True,
+        "official_api": {
+            "authenticated": ctx.has_official_client,
+            "features": [],
+            "status": "not_configured",
+        },
+        "unofficial_api": {
+            "authenticated": ctx.has_linkedin_client,
+            "features": [],
+            "status": "not_configured",
+        },
+        "recommendations": [],
+    }
+
+    # Check official API
+    official_token = get_official_token()
+    if official_token:
+        if official_token.is_expired:
+            result["official_api"]["status"] = "expired"
+            result["recommendations"].append("Run 'linkedin-mcp-auth oauth' to re-authenticate")
+        elif official_token.expires_soon:
+            result["official_api"]["status"] = "expiring_soon"
+            result["official_api"]["days_remaining"] = official_token.days_until_expiry
+            result["recommendations"].append(f"Token expires in {official_token.days_until_expiry} days - consider re-authenticating")
+        else:
+            result["official_api"]["status"] = "active"
+            result["official_api"]["days_remaining"] = official_token.days_until_expiry
+            result["official_api"]["scopes"] = official_token.scopes
+
+        # List available features based on scopes
+        if "w_member_social" in official_token.scopes:
+            result["official_api"]["features"].extend(["create_post", "create_image_post", "create_poll", "delete_post"])
+        if "profile" in official_token.scopes or "openid" in official_token.scopes:
+            result["official_api"]["features"].append("get_my_profile")
+    else:
+        result["recommendations"].append("Run 'linkedin-mcp-auth oauth' to enable official API features")
+
+    # Check unofficial API
+    cookies = get_unofficial_cookies()
+    if cookies:
+        if cookies.is_stale:
+            result["unofficial_api"]["status"] = "stale"
+            result["unofficial_api"]["hours_old"] = cookies.hours_since_extraction
+            result["recommendations"].append("Run 'linkedin-mcp-auth extract-cookies' to refresh cookies")
+        else:
+            result["unofficial_api"]["status"] = "active"
+            result["unofficial_api"]["hours_old"] = cookies.hours_since_extraction
+            result["unofficial_api"]["features"] = [
+                "get_profile", "get_company", "get_conversations", "send_message",
+                "search_people", "search_companies", "get_connections"
+            ]
+    elif ctx.has_linkedin_client:
+        result["unofficial_api"]["status"] = "active_legacy"
+        result["unofficial_api"]["features"] = ["get_profile", "get_company", "messaging", "search"]
+    else:
+        result["recommendations"].append("Run 'linkedin-mcp-auth extract-cookies' for unofficial API features")
+
+    return result
 
 
 # =============================================================================
@@ -1467,6 +1763,255 @@ async def get_connections(limit: int = 50) -> dict:
         return {"success": True, "connections": connections, "count": len(connections)}
     except Exception as e:
         logger.error("Failed to fetch connections", error=str(e))
+        return {"error": str(e)}
+
+
+# =============================================================================
+# Company Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def get_company(public_id: str) -> dict:
+    """
+    Get detailed company information.
+
+    Args:
+        public_id: Company's public identifier (URL slug, e.g., 'microsoft')
+
+    Returns company details including description, industry, employee count, etc.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        company = await ctx.linkedin_client.get_company(public_id)
+        return {"success": True, "company": company}
+    except Exception as e:
+        logger.error("Failed to fetch company", error=str(e), public_id=public_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_company_updates(public_id: str, limit: int = 10) -> dict:
+    """
+    Get recent posts/updates from a company page.
+
+    Args:
+        public_id: Company's public identifier (URL slug)
+        limit: Maximum updates to return (default: 10, max: 50)
+
+    Returns list of company posts/updates.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    limit = min(limit, 50)
+
+    try:
+        updates = await ctx.linkedin_client.get_company_updates(public_id, limit=limit)
+        return {"success": True, "updates": updates, "count": len(updates)}
+    except Exception as e:
+        logger.error("Failed to fetch company updates", error=str(e), public_id=public_id)
+        return {"error": str(e)}
+
+
+# =============================================================================
+# Lead Generation Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def get_profile_contact_info(public_id: str) -> dict:
+    """
+    Get contact information for a LinkedIn profile.
+
+    Args:
+        public_id: Profile's public identifier (URL slug)
+
+    Returns contact details including email addresses, phone numbers, websites, etc.
+    Note: Only returns data the profile owner has made visible.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        contact_info = await ctx.linkedin_client.get_profile_contact_info(public_id)
+        return {"success": True, "contact_info": contact_info}
+    except Exception as e:
+        logger.error("Failed to fetch contact info", error=str(e), public_id=public_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_profile_skills(public_id: str) -> dict:
+    """
+    Get skills listed on a LinkedIn profile.
+
+    Args:
+        public_id: Profile's public identifier (URL slug)
+
+    Returns list of skills with endorsement counts.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        skills = await ctx.linkedin_client.get_profile_skills(public_id)
+        return {"success": True, "skills": skills, "count": len(skills)}
+    except Exception as e:
+        logger.error("Failed to fetch skills", error=str(e), public_id=public_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_school(public_id: str) -> dict:
+    """
+    Get school/university information.
+
+    Args:
+        public_id: School's public identifier (URL slug)
+
+    Returns school details including name, description, follower count, etc.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        school = await ctx.linkedin_client.get_school(public_id)
+        return {"success": True, "school": school}
+    except Exception as e:
+        logger.error("Failed to fetch school", error=str(e), public_id=public_id)
+        return {"error": str(e)}
+
+
+# =============================================================================
+# Connection Management Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def get_invitations(limit: int = 20) -> dict:
+    """
+    Get pending connection invitations.
+
+    Args:
+        limit: Maximum invitations to return (default: 20, max: 100)
+
+    Returns list of pending connection requests.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    limit = min(limit, 100)
+
+    try:
+        invitations = await ctx.linkedin_client.get_invitations(limit=limit)
+        return {"success": True, "invitations": invitations, "count": len(invitations)}
+    except Exception as e:
+        logger.error("Failed to fetch invitations", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def send_connection_invitation(profile_public_id: str, message: str | None = None) -> dict:
+    """
+    Send a connection invitation to a LinkedIn profile.
+
+    Args:
+        profile_public_id: Target profile's public ID (URL slug)
+        message: Optional personalized message (max 300 characters)
+
+    Returns invitation result. Use sparingly to avoid LinkedIn restrictions.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    # Validate message length
+    if message and len(message) > 300:
+        return {"error": "Message too long. Maximum 300 characters allowed."}
+
+    try:
+        result = await ctx.linkedin_client.send_invitation(
+            profile_public_id=profile_public_id,
+            message=message,
+        )
+        return {
+            "success": True,
+            "result": result,
+            "note": "Connection request sent. Use sparingly to avoid restrictions.",
+        }
+    except Exception as e:
+        logger.error("Failed to send invitation", error=str(e), profile_id=profile_public_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def withdraw_connection_invitation(invitation_id: str) -> dict:
+    """
+    Withdraw a pending connection invitation.
+
+    Args:
+        invitation_id: ID of the invitation to withdraw
+
+    Returns withdrawal result.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not initialized"}
+
+    try:
+        result = await ctx.linkedin_client.withdraw_invitation(invitation_id)
+        return {"success": True, "result": result}
+    except Exception as e:
+        logger.error("Failed to withdraw invitation", error=str(e), invitation_id=invitation_id)
         return {"error": str(e)}
 
 

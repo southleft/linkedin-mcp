@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
     from linkedin_mcp.config.settings import Settings
+    from linkedin_mcp.services.linkedin.official_client import LinkedInOfficialClient
 
 
 @dataclass
@@ -37,8 +38,11 @@ class AppContext:
     # Configuration
     settings: "Settings"
 
-    # LinkedIn API client (tomquirk/linkedin-api)
+    # LinkedIn API client (tomquirk/linkedin-api) - Unofficial, less reliable
     linkedin_client: "Linkedin | None" = None
+
+    # LinkedIn Official API client (OAuth 2.0) - Official, reliable for basic profile
+    official_client: "LinkedInOfficialClient | None" = None
 
     # Database
     db_engine: "AsyncEngine | None" = None
@@ -69,8 +73,13 @@ class AppContext:
 
     @property
     def has_linkedin_client(self) -> bool:
-        """Check if LinkedIn client is available."""
+        """Check if LinkedIn client (unofficial) is available."""
         return self.linkedin_client is not None
+
+    @property
+    def has_official_client(self) -> bool:
+        """Check if LinkedIn Official API client is available."""
+        return self.official_client is not None and self.official_client.is_authenticated
 
     @property
     def has_database(self) -> bool:

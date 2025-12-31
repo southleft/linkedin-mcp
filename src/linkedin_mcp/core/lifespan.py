@@ -27,9 +27,126 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+async def init_official_client(settings: Settings) -> Any:
+    """
+    Initialize the LinkedIn Official API client using OAuth 2.0.
+
+    This client provides reliable access to basic profile data via LinkedIn's
+    official API using proper OAuth authentication.
+
+    Supports two token sources (in priority order):
+    1. System keychain (secure, recommended) - via linkedin-mcp-auth CLI
+    2. Legacy JSON file fallback - for backward compatibility
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        Initialized LinkedInOfficialClient, or None if not configured
+    """
+    import time
+
+    from linkedin_mcp.services.linkedin.official_client import LinkedInOfficialClient
+    from linkedin_mcp.services.storage.token_storage import get_official_token
+
+    # Priority 1: Check system keychain for token
+    token_data = get_official_token()
+
+    if token_data:
+        if token_data.is_expired:
+            logger.warning(
+                "Official LinkedIn API token expired",
+                expired_at=token_data.expires_at.isoformat(),
+            )
+            logger.info("Run: linkedin-mcp-auth oauth --force")
+            return None
+
+        if token_data.expires_soon:
+            logger.warning(
+                "Official LinkedIn API token expires soon",
+                days_remaining=token_data.days_until_expiry,
+            )
+            logger.info("Consider re-authenticating: linkedin-mcp-auth oauth --force")
+
+        try:
+            # Create client with token from keychain
+            client = LinkedInOfficialClient(
+                client_id=settings.linkedin.client_id.get_secret_value()
+                if settings.linkedin.client_id else "",
+                client_secret=settings.linkedin.client_secret.get_secret_value()
+                if settings.linkedin.client_secret else "",
+            )
+
+            # Set the token directly from keychain
+            client._access_token = token_data.access_token
+            client._token_expires_at = token_data.expires_at.timestamp()
+
+            logger.info(
+                "Official LinkedIn API client initialized from keychain",
+                days_remaining=token_data.days_until_expiry,
+                scopes=token_data.scopes,
+            )
+            return client
+
+        except Exception as e:
+            logger.warning(
+                "Failed to initialize Official LinkedIn API client from keychain",
+                error=str(e),
+            )
+            # Fall through to legacy file check
+
+    # Priority 2: Legacy JSON file fallback
+    token_path = settings.session_cookie_path.parent / "oauth_token.json"
+
+    if not token_path.exists():
+        logger.info(
+            "Official LinkedIn API disabled - no token found",
+            keychain_checked=True,
+            legacy_path=str(token_path),
+        )
+        logger.info("Run: linkedin-mcp-auth oauth")
+        return None
+
+    try:
+        # Legacy: load from JSON file
+        client = LinkedInOfficialClient(
+            client_id=settings.linkedin.client_id.get_secret_value()
+            if settings.linkedin.client_id else "",
+            client_secret=settings.linkedin.client_secret.get_secret_value()
+            if settings.linkedin.client_secret else "",
+            token_path=token_path,
+        )
+
+        if client.is_authenticated:
+            logger.info(
+                "Official LinkedIn API client initialized from legacy file",
+                token_valid_for=f"{client._token_expires_at - time.time():.0f}s"
+                if client._token_expires_at else "unknown",
+            )
+            logger.info(
+                "Consider migrating to keychain: linkedin-mcp-auth oauth --force"
+            )
+            return client
+        else:
+            logger.warning("Official LinkedIn API token expired or invalid")
+            logger.info("Run: linkedin-mcp-auth oauth --force")
+            return None
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize Official LinkedIn API client",
+            error=str(e),
+        )
+        return None
+
+
 async def init_linkedin_client(settings: Settings) -> Any:
     """
-    Initialize the LinkedIn API client.
+    Initialize the LinkedIn API client (unofficial/Voyager API).
+
+    Supports multiple authentication methods (in priority order):
+    1. Cookies from system keychain (via linkedin-mcp-auth extract-cookies)
+    2. Username/password from environment (legacy, may cause issues)
 
     Args:
         settings: Application settings
@@ -39,42 +156,83 @@ async def init_linkedin_client(settings: Settings) -> Any:
     """
     import os
 
+    from linkedin_mcp.services.storage.token_storage import get_unofficial_cookies
+
     # Debug: Log environment variables
     logger.info(
-        "LinkedIn client init - checking config",
+        "LinkedIn unofficial client init - checking config",
         api_enabled=settings.linkedin.api_enabled,
-        api_enabled_type=type(settings.linkedin.api_enabled).__name__,
         email=settings.linkedin.email,
         password_set=settings.linkedin.password is not None,
-        env_api_enabled=os.environ.get("LINKEDIN_API_ENABLED"),
         cookie_path=str(settings.session_cookie_path),
-        cookie_exists=settings.session_cookie_path.exists(),
     )
 
     # Check if linkedin-api is enabled
     if not settings.linkedin.api_enabled:
         logger.info(
-            "LinkedIn API disabled - using browser automation only",
+            "LinkedIn unofficial API disabled",
             reason="LINKEDIN_API_ENABLED=false or not set",
-            api_enabled_value=settings.linkedin.api_enabled,
-        )
-        return None
-
-    # Check if credentials are provided
-    if not settings.linkedin.email or not settings.linkedin.password:
-        logger.info(
-            "LinkedIn API disabled - no credentials provided",
-            reason="LINKEDIN_EMAIL and LINKEDIN_PASSWORD not set",
-            email=settings.linkedin.email,
-            password_set=settings.linkedin.password is not None,
         )
         return None
 
     from linkedin_mcp.services.linkedin import LinkedInClient
 
+    # Priority 1: Try keychain cookies (safer, no password needed)
+    cookies = get_unofficial_cookies()
+
+    if cookies:
+        if cookies.is_stale:
+            logger.warning(
+                "LinkedIn cookies may be stale",
+                hours_old=cookies.hours_since_extraction,
+            )
+            logger.info("Consider refreshing: linkedin-mcp-auth extract-cookies")
+
+        try:
+            logger.info(
+                "Initializing LinkedIn client from keychain cookies",
+                browser=cookies.browser,
+                hours_old=cookies.hours_since_extraction,
+            )
+
+            # Create client with cookies (no password needed)
+            client = LinkedInClient(
+                cookies={
+                    "li_at": cookies.li_at,
+                    "JSESSIONID": cookies.jsessionid or "",
+                },
+                rate_limit=settings.rate_limit.requests_per_minute * 60,
+            )
+
+            await client.initialize()
+            logger.info("LinkedIn unofficial client initialized from keychain cookies")
+            return client
+
+        except Exception as e:
+            logger.warning(
+                "Failed to initialize LinkedIn client from keychain cookies",
+                error=str(e),
+            )
+            logger.info("Run: linkedin-mcp-auth extract-cookies")
+            # Fall through to legacy method
+
+    # Priority 2: Legacy username/password method (may cause session issues)
+    if not settings.linkedin.email or not settings.linkedin.password:
+        logger.info(
+            "LinkedIn unofficial API disabled - no credentials",
+            reason="No keychain cookies and no LINKEDIN_EMAIL/PASSWORD set",
+        )
+        logger.info("Run: linkedin-mcp-auth extract-cookies")
+        return None
+
+    logger.warning(
+        "Using username/password auth (may cause session issues)",
+        recommendation="Use: linkedin-mcp-auth extract-cookies instead",
+    )
+
     try:
         logger.info(
-            "Initializing LinkedIn client",
+            "Initializing LinkedIn client with credentials",
             email=settings.linkedin.email,
             cookie_path=str(settings.session_cookie_path),
         )
@@ -83,13 +241,13 @@ async def init_linkedin_client(settings: Settings) -> Any:
             email=settings.linkedin.email,
             password=settings.linkedin.password.get_secret_value(),
             cookie_path=settings.session_cookie_path,
-            rate_limit=settings.rate_limit.requests_per_minute * 60,  # Convert to hourly
+            rate_limit=settings.rate_limit.requests_per_minute * 60,
         )
 
         logger.info("LinkedInClient created, calling initialize()")
         await client.initialize()
 
-        logger.info("LinkedIn client initialized successfully")
+        logger.info("LinkedIn unofficial client initialized (legacy method)")
         return client
 
     except Exception as e:
@@ -307,6 +465,7 @@ async def lifespan() -> AsyncGenerator[AppContext, None]:
 
     try:
         # Initialize services concurrently where possible
+        official_task = asyncio.create_task(init_official_client(settings))
         linkedin_task = asyncio.create_task(init_linkedin_client(settings))
         db_task = asyncio.create_task(init_database(settings))
         scheduler_task = asyncio.create_task(init_scheduler(settings))
@@ -314,6 +473,7 @@ async def lifespan() -> AsyncGenerator[AppContext, None]:
 
         # Wait for all initializations
         results = await asyncio.gather(
+            official_task,
             linkedin_task,
             db_task,
             scheduler_task,
@@ -322,7 +482,16 @@ async def lifespan() -> AsyncGenerator[AppContext, None]:
         )
 
         # Process results
-        linkedin_result, db_result, scheduler_result, browser_result = results
+        official_result, linkedin_result, db_result, scheduler_result, browser_result = results
+
+        # Handle Official LinkedIn client (preferred for basic profile)
+        if isinstance(official_result, Exception):
+            logger.warning(
+                "Official LinkedIn API initialization failed",
+                error=str(official_result),
+            )
+        else:
+            ctx.official_client = official_result
 
         # Handle LinkedIn client (optional - server can run without auth for testing)
         if isinstance(linkedin_result, Exception):
@@ -361,7 +530,8 @@ async def lifespan() -> AsyncGenerator[AppContext, None]:
 
         logger.info(
             "Server initialized successfully",
-            linkedin=ctx.has_linkedin_client,
+            official_api=ctx.has_official_client,
+            unofficial_api=ctx.has_linkedin_client,
             database=ctx.has_database,
             scheduler=ctx.has_scheduler,
             browser=ctx.has_browser,

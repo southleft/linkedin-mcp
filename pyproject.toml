@@ -49,6 +49,15 @@ dependencies = [
     "tenacity>=9.0.0",
     "python-dateutil>=2.9.0",
     "cryptography>=44.0.0",
+
+    # Secure Token Storage
+    "keyring>=25.0.0",
+
+    # Browser Cookie Extraction
+    "browser-cookie3>=0.19.1",
+
+    # Official LinkedIn API (OAuth)
+    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +73,7 @@ dev = [
 
 [project.scripts]
 linkedin-mcp = "linkedin_mcp.main:main"
+linkedin-mcp-auth = "linkedin_mcp.cli.auth:main"
 
 [build-system]
 requires = ["hatchling"]
