@@ -15,6 +15,80 @@ mcp = FastMCP(
 
 
 # =============================================================================
+# Diagnostic Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def debug_context() -> dict:
+    """
+    Debug tool to check the internal state of the MCP server.
+
+    Returns information about:
+    - Whether LinkedIn client is initialized
+    - Settings configuration
+    - Cookie file status
+    - Initialization errors
+    """
+    import os
+    from pathlib import Path
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.config.settings import get_settings
+
+    try:
+        ctx = get_context()
+        settings = get_settings()
+
+        # Check cookie file
+        cookie_path = settings.session_cookie_path
+        cookie_exists = cookie_path.exists()
+        cookie_content = None
+        if cookie_exists:
+            try:
+                import json
+                cookie_content = list(json.loads(cookie_path.read_text()).keys())
+            except Exception as e:
+                cookie_content = f"Error reading: {e}"
+
+        return {
+            "success": True,
+            "context": {
+                "is_initialized": ctx.is_initialized,
+                "has_linkedin_client": ctx.has_linkedin_client,
+                "has_database": ctx.has_database,
+                "has_scheduler": ctx.has_scheduler,
+                "has_browser": ctx.has_browser,
+                "linkedin_client_type": type(ctx.linkedin_client).__name__ if ctx.linkedin_client else None,
+            },
+            "settings": {
+                "api_enabled": settings.linkedin.api_enabled,
+                "email": settings.linkedin.email,
+                "password_set": settings.linkedin.password is not None,
+                "session_cookie_path": str(settings.session_cookie_path),
+                "session_cookie_path_absolute": str(settings.session_cookie_path.absolute()),
+            },
+            "cookie_file": {
+                "exists": cookie_exists,
+                "keys": cookie_content,
+            },
+            "environment": {
+                "LINKEDIN_API_ENABLED": os.environ.get("LINKEDIN_API_ENABLED"),
+                "LINKEDIN_EMAIL": os.environ.get("LINKEDIN_EMAIL"),
+                "LINKEDIN_PASSWORD": "***" if os.environ.get("LINKEDIN_PASSWORD") else None,
+                "CWD": os.getcwd(),
+            },
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+
+# =============================================================================
 # Profile Tools
 # =============================================================================
 

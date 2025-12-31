@@ -35,8 +35,10 @@ async def run_server() -> None:
         )
 
         # Run the MCP server based on transport
+        # CRITICAL: For stdio transport, show_banner=False prevents stdout pollution
+        # stdout MUST be reserved for JSON-RPC protocol messages only
         if settings.server.transport == "stdio":
-            await mcp.run_stdio_async()
+            await mcp.run_stdio_async(show_banner=False)
         elif settings.server.transport == "streamable-http":
             await mcp.run_uvicorn_async(
                 host=settings.server.host,
@@ -57,7 +59,7 @@ def main() -> None:
     try:
         asyncio.run(run_server())
     except KeyboardInterrupt:
-        print("\nServer stopped by user")
+        print("\nServer stopped by user", file=sys.stderr)
         sys.exit(0)
     except Exception as e:
         print(f"Server error: {e}", file=sys.stderr)

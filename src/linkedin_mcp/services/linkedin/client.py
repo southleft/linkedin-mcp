@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
+from requests.cookies import RequestsCookieJar
+
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -106,25 +108,68 @@ class LinkedInClient:
     async def initialize(self) -> None:
         """Initialize the LinkedIn client with authentication."""
         if self._initialized:
+            logger.info("LinkedIn client already initialized, skipping")
             return
 
+        logger.info(
+            "Starting LinkedIn client initialization",
+            cookie_path=str(self.cookie_path),
+            cookie_path_exists=self.cookie_path.exists(),
+        )
+
         cookies = await self._load_cookies()
+
+        logger.info(
+            "Cookies loaded for initialization",
+            has_cookies=cookies is not None,
+            cookie_type=type(cookies).__name__ if cookies else None,
+            cookie_count=len(cookies) if cookies else 0,
+        )
 
         def create_client() -> Any:
             from linkedin_api import Linkedin
 
-            return Linkedin(
+            logger.info(
+                "Creating LinkedIn client in executor",
+                has_cookies=cookies is not None,
+                cookie_count=len(cookies) if cookies else 0,
+                cookie_type=type(cookies).__name__ if cookies else None,
+            )
+
+            # Log the actual call parameters
+            logger.info(
+                "Calling Linkedin constructor",
+                email=self.email,
+                password_length=len(self.password) if self.password else 0,
+                cookies_provided=cookies is not None,
+                refresh_cookies=True,
+            )
+
+            client = Linkedin(
                 self.email,
                 self.password,
                 cookies=cookies,
                 refresh_cookies=True,
             )
 
+            logger.info(
+                "Linkedin constructor returned",
+                client_type=type(client).__name__,
+            )
+
+            return client
+
         try:
+            logger.info("Running create_client in executor")
             self._client = await asyncio.get_event_loop().run_in_executor(
                 None, create_client
             )
             self._initialized = True
+
+            logger.info(
+                "Client initialized, saving cookies",
+                client_type=type(self._client).__name__,
+            )
 
             # Save refreshed cookies
             await self._save_cookies()
@@ -132,24 +177,41 @@ class LinkedInClient:
             logger.info("LinkedIn client initialized successfully")
 
         except Exception as e:
-            logger.error("LinkedIn authentication failed", error=str(e))
+            import traceback
+            logger.error(
+                "LinkedIn authentication failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                traceback=traceback.format_exc(),
+            )
             raise LinkedInAuthError(
                 "Failed to authenticate with LinkedIn",
                 cause=e,
             ) from e
 
-    async def _load_cookies(self) -> dict[str, Any] | None:
-        """Load session cookies from file."""
+    async def _load_cookies(self) -> RequestsCookieJar | None:
+        """Load session cookies from file and convert to RequestsCookieJar."""
+        logger.info("Checking for cookies", path=str(self.cookie_path), exists=self.cookie_path.exists())
+
         if not self.cookie_path.exists():
+            logger.warning("Cookie file not found", path=str(self.cookie_path))
             return None
 
         try:
             content = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self.cookie_path.read_text()
             )
-            cookies = json.loads(content)
-            logger.debug("Loaded session cookies from file")
-            return cookies
+            cookie_dict = json.loads(content)
+            cookie_keys = list(cookie_dict.keys()) if cookie_dict else []
+            logger.info("Loaded session cookies", keys=cookie_keys, count=len(cookie_dict))
+
+            # Convert dict to RequestsCookieJar (required by linkedin-api)
+            cookie_jar = RequestsCookieJar()
+            for name, value in cookie_dict.items():
+                cookie_jar.set(name, value, domain=".linkedin.com", path="/")
+
+            logger.info("Converted cookies to RequestsCookieJar")
+            return cookie_jar
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load cookies", error=str(e))
             return None

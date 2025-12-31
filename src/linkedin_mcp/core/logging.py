@@ -63,19 +63,20 @@ def configure_logging(settings: LoggingSettings) -> None:
             ),
         ]
 
-    # Configure structlog
+    # Configure structlog - MUST use stderr for MCP stdio transport
+    # stdout is reserved for JSON-RPC protocol messages only
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         cache_logger_on_first_use=True,
     )
 
-    # Configure standard library logging
+    # Configure standard library logging - MUST use stderr for MCP
     logging.basicConfig(
         format="%(message)s",
-        stream=sys.stdout,
+        stream=sys.stderr,
         level=log_level,
     )
 
@@ -121,6 +122,9 @@ def suppress_noisy_loggers() -> None:
         "playwright",
         "aiosqlite",
         "sqlalchemy.engine",
+        "apscheduler",  # Suppress scheduler startup messages
+        "apscheduler.scheduler",
+        "apscheduler.executors.default",
     ]
 
     for logger_name in noisy_loggers:

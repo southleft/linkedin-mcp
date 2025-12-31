@@ -35,12 +35,49 @@ async def init_linkedin_client(settings: Settings) -> Any:
         settings: Application settings
 
     Returns:
-        Initialized LinkedInClient wrapper
+        Initialized LinkedInClient wrapper, or None if disabled
     """
+    import os
+
+    # Debug: Log environment variables
+    logger.info(
+        "LinkedIn client init - checking config",
+        api_enabled=settings.linkedin.api_enabled,
+        api_enabled_type=type(settings.linkedin.api_enabled).__name__,
+        email=settings.linkedin.email,
+        password_set=settings.linkedin.password is not None,
+        env_api_enabled=os.environ.get("LINKEDIN_API_ENABLED"),
+        cookie_path=str(settings.session_cookie_path),
+        cookie_exists=settings.session_cookie_path.exists(),
+    )
+
+    # Check if linkedin-api is enabled
+    if not settings.linkedin.api_enabled:
+        logger.info(
+            "LinkedIn API disabled - using browser automation only",
+            reason="LINKEDIN_API_ENABLED=false or not set",
+            api_enabled_value=settings.linkedin.api_enabled,
+        )
+        return None
+
+    # Check if credentials are provided
+    if not settings.linkedin.email or not settings.linkedin.password:
+        logger.info(
+            "LinkedIn API disabled - no credentials provided",
+            reason="LINKEDIN_EMAIL and LINKEDIN_PASSWORD not set",
+            email=settings.linkedin.email,
+            password_set=settings.linkedin.password is not None,
+        )
+        return None
+
     from linkedin_mcp.services.linkedin import LinkedInClient
 
     try:
-        logger.info("Initializing LinkedIn client")
+        logger.info(
+            "Initializing LinkedIn client",
+            email=settings.linkedin.email,
+            cookie_path=str(settings.session_cookie_path),
+        )
 
         client = LinkedInClient(
             email=settings.linkedin.email,
@@ -49,13 +86,20 @@ async def init_linkedin_client(settings: Settings) -> Any:
             rate_limit=settings.rate_limit.requests_per_minute * 60,  # Convert to hourly
         )
 
+        logger.info("LinkedInClient created, calling initialize()")
         await client.initialize()
 
         logger.info("LinkedIn client initialized successfully")
         return client
 
     except Exception as e:
-        logger.error("Failed to initialize LinkedIn client", error=str(e))
+        import traceback
+        logger.error(
+            "Failed to initialize LinkedIn client",
+            error=str(e),
+            error_type=type(e).__name__,
+            traceback=traceback.format_exc(),
+        )
         raise LinkedInAuthError(
             "Failed to authenticate with LinkedIn",
             cause=e,
@@ -280,10 +324,14 @@ async def lifespan() -> AsyncGenerator[AppContext, None]:
         # Process results
         linkedin_result, db_result, scheduler_result, browser_result = results
 
-        # Handle LinkedIn client (required)
+        # Handle LinkedIn client (optional - server can run without auth for testing)
         if isinstance(linkedin_result, Exception):
-            raise linkedin_result
-        ctx.linkedin_client = linkedin_result
+            logger.warning(
+                "LinkedIn authentication failed - some tools will be unavailable",
+                error=str(linkedin_result),
+            )
+        else:
+            ctx.linkedin_client = linkedin_result
 
         # Handle database (optional but recommended)
         if isinstance(db_result, Exception):

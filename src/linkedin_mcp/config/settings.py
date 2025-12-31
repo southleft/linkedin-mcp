@@ -8,15 +8,35 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _get_project_root() -> Path:
+    """Get the project root directory (where pyproject.toml lives)."""
+    # Start from this file's location and look for pyproject.toml
+    current = Path(__file__).parent
+    for _ in range(5):  # Go up max 5 levels
+        if (current / "pyproject.toml").exists():
+            return current
+        current = current.parent
+    # Fallback to current working directory
+    return Path.cwd()
+
+
+# Pre-compute project root at module load time
+PROJECT_ROOT = _get_project_root()
 
 
 class LinkedInSettings(BaseSettings):
     """LinkedIn API credentials and settings."""
 
-    email: str = Field(..., description="LinkedIn account email")
-    password: SecretStr = Field(..., description="LinkedIn account password")
+    email: str | None = Field(default=None, description="LinkedIn account email")
+    password: SecretStr | None = Field(default=None, description="LinkedIn account password")
+    api_enabled: bool = Field(
+        default=False,
+        description="Enable linkedin-api library (may cause session issues)",
+    )
 
     model_config = SettingsConfigDict(env_prefix="LINKEDIN_")
 
@@ -24,8 +44,8 @@ class LinkedInSettings(BaseSettings):
 class DatabaseSettings(BaseSettings):
     """Database configuration."""
 
-    url: str = Field(
-        default="sqlite+aiosqlite:///./data/linkedin_mcp.db",
+    url: str | None = Field(
+        default=None,
         description="SQLAlchemy async database URL",
     )
     echo: bool = Field(default=False, description="Echo SQL statements")
@@ -34,9 +54,19 @@ class DatabaseSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DATABASE_")
 
+    @model_validator(mode="after")
+    def set_default_url(self) -> "DatabaseSettings":
+        """Set default URL using absolute path if not provided."""
+        if self.url is None:
+            db_path = PROJECT_ROOT / "data" / "linkedin_mcp.db"
+            object.__setattr__(self, "url", f"sqlite+aiosqlite:///{db_path}")
+        return self
+
     @field_validator("url")
     @classmethod
-    def validate_url(cls, v: str) -> str:
+    def validate_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         if not v.startswith(("sqlite", "postgresql", "mysql")):
             raise ValueError("Invalid database URL scheme")
         return v
@@ -71,12 +101,19 @@ class BrowserSettings(BaseSettings):
 
     headless: bool = Field(default=True)
     timeout: int = Field(default=30000, ge=5000, le=120000)
-    user_data_dir: Path = Field(default=Path("./data/browser_data"))
+    user_data_dir: Path | None = Field(default=None)
     slowmo: int = Field(default=0, ge=0, le=5000)
     viewport_width: int = Field(default=1280)
     viewport_height: int = Field(default=720)
 
     model_config = SettingsConfigDict(env_prefix="BROWSER_")
+
+    @model_validator(mode="after")
+    def set_default_user_data_dir(self) -> "BrowserSettings":
+        """Set default user_data_dir using absolute path if not provided."""
+        if self.user_data_dir is None:
+            object.__setattr__(self, "user_data_dir", PROJECT_ROOT / "data" / "browser_data")
+        return self
 
 
 class LoggingSettings(BaseSettings):
@@ -122,7 +159,7 @@ class Settings(BaseSettings):
 
     # Security
     encryption_key: SecretStr | None = Field(default=None)
-    session_cookie_path: Path = Field(default=Path("./data/session_cookies.json"))
+    session_cookie_path: Path | None = Field(default=None)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -130,6 +167,13 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def set_default_paths(self) -> "Settings":
+        """Set default paths using absolute paths if not provided."""
+        if self.session_cookie_path is None:
+            object.__setattr__(self, "session_cookie_path", PROJECT_ROOT / "data" / "session_cookies.json")
+        return self
 
 
 @lru_cache
