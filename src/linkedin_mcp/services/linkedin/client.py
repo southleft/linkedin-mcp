@@ -515,21 +515,19 @@ class LinkedInClient:
     )
     async def search_people(
         self,
-        keywords: str,
+        keywords: str | None = None,
         limit: int = 10,
-        connection_of: str | None = None,
-        current_company: list[str] | None = None,
-        network_depths: list[str] | None = None,
+        keyword_title: str | None = None,
+        keyword_company: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search for people on LinkedIn.
 
         Args:
-            keywords: Search keywords
+            keywords: General search keywords
             limit: Maximum results
-            connection_of: Filter by connection of this profile
-            current_company: Filter by current company
-            network_depths: Network depth filters (F, S, O)
+            keyword_title: Filter by job title keywords
+            keyword_company: Filter by company name keywords
 
         Returns:
             List of matching profiles
@@ -539,9 +537,8 @@ class LinkedInClient:
             self._client.search_people,
             keywords=keywords,
             limit=limit,
-            connection_of=connection_of,
-            current_company=current_company,
-            network_depths=network_depths,
+            keyword_title=keyword_title,
+            keyword_company=keyword_company,
         )
 
     async def search_companies(

@@ -1369,21 +1369,23 @@ async def send_message(profile_id: str, text: str) -> dict:
 
 @mcp.tool()
 async def search_people(
-    keywords: str,
+    keywords: str | None = None,
     limit: int = 10,
-    connection_of: str | None = None,
-    current_company: str | None = None,
+    keyword_title: str | None = None,
+    keyword_company: str | None = None,
 ) -> dict:
     """
     Search for people on LinkedIn.
 
     Args:
-        keywords: Search keywords
+        keywords: General search keywords
         limit: Maximum results to return (default: 10, max: 50)
-        connection_of: Filter by connection of this profile ID (optional)
-        current_company: Filter by current company (optional)
+        keyword_title: Filter by job title (e.g., 'VP Engineering', 'Product Manager')
+        keyword_company: Filter by company name
 
-    Returns list of matching profiles.
+    Note: Location/region filters are not supported by the underlying API.
+
+    Returns list of matching profiles with name, title, location, and profile URL.
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
@@ -1400,8 +1402,8 @@ async def search_people(
         results = await ctx.linkedin_client.search_people(
             keywords=keywords,
             limit=limit,
-            connection_of=connection_of,
-            current_company=[current_company] if current_company else None,
+            keyword_title=keyword_title,
+            keyword_company=keyword_company,
         )
         return {"success": True, "results": results, "count": len(results)}
     except Exception as e:

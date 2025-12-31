@@ -1,302 +1,128 @@
 # LinkedIn Intelligence MCP Server
 
-> **Transform LinkedIn from a social network into your AI-powered business intelligence platform.**
+> **Connect Claude Desktop to LinkedIn for feed monitoring, people search, and messaging.**
 
-The LinkedIn MCP Server connects Claude Desktop directly to LinkedIn's data layer, enabling natural language conversations that extract insights, automate engagement, and supercharge your professional networking—all without leaving your AI assistant.
-
----
-
-## Why LinkedIn MCP?
-
-| Traditional LinkedIn | With LinkedIn MCP |
-|---------------------|-------------------|
-| Manually scroll through feeds | Ask Claude: *"Show me posts from my network about AI this week"* |
-| Export connections to spreadsheets | Ask Claude: *"Analyze my network by industry and seniority"* |
-| Guess at optimal posting times | Ask Claude: *"When do my posts get the most engagement?"* |
-| Research prospects one-by-one | Ask Claude: *"Get profiles for these 10 decision-makers"* |
-| Copy-paste between tools | Seamless integration with Gmail, Calendar, and other MCPs |
-
-### The MCP Ecosystem Advantage
-
-LinkedIn MCP becomes exponentially more powerful when combined with other Claude Desktop integrations:
-
-- **Gmail MCP** → *"Find LinkedIn profiles for everyone who emailed me this week about partnerships"*
-- **Google Calendar MCP** → *"Who am I meeting tomorrow? Pull their LinkedIn profiles and recent posts"*
-- **Notion/Obsidian MCP** → *"Add this prospect's LinkedIn summary to my CRM notes"*
-- **File System MCP** → *"Export my network analytics to a CSV for my quarterly report"*
-
-This isn't just another LinkedIn tool—it's the bridge that connects your professional network to your entire AI-powered workflow.
+The LinkedIn MCP Server connects Claude Desktop to LinkedIn, enabling natural language conversations to browse your feed, search for people and companies, and manage messages—all without leaving your AI assistant.
 
 ---
 
-## Use Cases by Role
+## What Works Today
+
+| Feature | Status | Example |
+|---------|--------|---------|
+| **Browse your feed** | ✅ Working | *"Show me posts from my network about AI"* |
+| **Get your profile** | ✅ Working | *"What does my LinkedIn profile say?"* |
+| **Search for people** | ✅ Working | *"Find software engineers with 'VP' in their title"* |
+| **Search for companies** | ✅ Working | *"Search for fintech companies"* |
+| **View conversations** | ✅ Working | *"Show my recent LinkedIn messages"* |
+| **Send messages** | ✅ Working | *"Send a message to [connection]"* |
+| **Create posts** | ✅ Working | *"Post this to LinkedIn"* |
+| **Send connection requests** | ✅ Working | *"Send a connection request to [person]"* |
+
+### Known Limitations
+
+> **Important**: This uses LinkedIn's unofficial API which has significant limitations:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Get other profiles | ⚠️ Unreliable | Often fails with API errors |
+| Get anyone's posts | ❌ Broken | LinkedIn API returns errors |
+| Analyze post engagement | ❌ Broken | Depends on profile posts |
+| Region/location filters | ❌ Not working | Returns empty results |
+| Connection list | ❌ Broken | API endpoint issues |
+| Pending invitations | ❌ Broken | Redirect loop errors |
+| Contact info | ❌ Broken | Redirect loop errors |
+
+The underlying [linkedin-api](https://github.com/tomquirk/linkedin-api) library has known issues with many endpoints. This MCP exposes what's available, but LinkedIn frequently changes their internal APIs.
+
+---
+
+## Realistic Use Cases
 
 <details>
-<summary><h3>🎯 Sales Development Representatives (SDRs)</h3></summary>
+<summary><h3>🔍 Feed Monitoring & Content Discovery</h3></summary>
 
-**Turn LinkedIn into your AI-powered prospecting engine.**
+**What actually works:**
 
-#### Your Daily Workflow, Supercharged
+- Browse your LinkedIn feed with natural language
+- Filter posts by topic or keyword
+- See what your network is talking about
 
-| Before | After (with LinkedIn MCP) |
-|--------|---------------------------|
-| 2 hours researching prospects | *"Get me profiles and recent activity for these 20 leads"* |
-| Generic outreach messages | *"What topics does [prospect] post about? Draft a personalized message"* |
-| Missing engagement signals | *"Alert me when target accounts post about [pain point]"* |
+**Example prompts that work:**
+- *"Show me the latest 10 posts from my feed"*
+- *"What are people in my network posting about AI?"*
+- *"Find posts mentioning 'product launch' in my feed"*
 
-#### Key Tools for SDRs
-
-```
-🔍 Research & Intelligence
-├── search_people() - Find prospects by company, title, keywords
-├── get_profile() - Deep-dive into prospect backgrounds
-├── get_profile_posts() - See what they care about
-└── batch_get_profiles() - Research entire account lists at once
-
-📬 Outreach & Engagement
-├── send_connection_request() - Personalized invites at scale
-├── send_message() - Direct outreach to connections
-├── like_post() / comment_on_post() - Warm up cold prospects
-└── react_to_post() - Show genuine engagement
-
-📊 Pipeline Intelligence
-├── get_conversations() - Track outreach threads
-├── analyze_engagement() - See what messaging resonates
-└── get_pending_invitations() - Manage your connection pipeline
-```
-
-#### Example Prompts for SDRs
-
-- *"Search for VPs of Engineering at Series B fintech companies in NYC"*
-- *"What has [prospect name] posted about in the last month? Summarize the themes"*
-- *"Send connection requests to these 10 people with a message about [topic]"*
-- *"Show me which of my connection requests from last week were accepted"*
-- *"Cross-reference my Gmail contacts with LinkedIn—who should I connect with?"*
+**Tools used:**
+- `get_feed()` - Retrieve your home feed
+- `get_my_profile()` - Get your own profile data
 
 </details>
 
 <details>
-<summary><h3>🤝 Business Development & Partnerships</h3></summary>
+<summary><h3>🎯 People & Company Search</h3></summary>
 
-**Map relationships and identify partnership opportunities at scale.**
+**What actually works:**
 
-#### Strategic Intelligence Gathering
+- Search for people by keywords and job title
+- Search for companies by name or industry
+- Basic filtering by title keywords
 
-| Challenge | LinkedIn MCP Solution |
-|-----------|----------------------|
-| Finding decision-makers | *"Who are the BD leads at [company]? Get their profiles"* |
-| Understanding company priorities | *"What is [company] posting about? Any partnership announcements?"* |
-| Tracking competitor partnerships | *"Show me [competitor]'s recent posts mentioning partnerships or integrations"* |
-| Warm introductions | *"Which of my connections work at or are connected to [target company]?"* |
+**Example prompts that work:**
+- *"Search for people with 'Product Manager' in their title"*
+- *"Find engineers who work in fintech"*
+- *"Search for companies in the AI space"*
 
-#### Key Tools for BD Professionals
+**What doesn't work:**
+- Location/region filtering (returns empty)
+- Getting detailed profiles of search results
+- Viewing posts from people you find
 
-```
-🏢 Company Intelligence
-├── search_companies() - Find potential partners by criteria
-├── get_profile_posts() - Track company announcements
-└── search_people() - Identify key stakeholders
-
-🔗 Relationship Mapping
-├── get_connections() - Your network inventory
-├── get_network_stats() - Network composition analysis
-└── get_profile_contact_info() - Direct contact details
-
-📈 Opportunity Tracking
-├── get_feed() - Monitor partnership signals
-├── analyze_content_performance() - Understand what resonates
-└── generate_engagement_report() - Track relationship building
-```
-
-#### Example Prompts for BD
-
-- *"Find AI/ML companies that have posted about seeking partnerships in the last 30 days"*
-- *"Map my path to the CEO of [target company]—who do I know there?"*
-- *"What integrations or partnerships has [company] announced this quarter?"*
-- *"Get me the profiles of everyone with 'Partnerships' in their title at these 5 companies"*
-- *"Summarize the recent posts from decision-makers at my target accounts"*
+**Tools used:**
+- `search_people(keywords, keyword_title)` - Find people
+- `search_companies(keywords)` - Find companies
 
 </details>
 
 <details>
-<summary><h3>📈 Personal Brand Builders</h3></summary>
+<summary><h3>💬 Messaging</h3></summary>
 
-**Data-driven content strategy for thought leadership.**
+**What actually works:**
 
-#### Build Your Presence Strategically
+- View your conversation threads
+- Send messages to connections
+- Read message history
 
-| Guesswork | Data-Driven (with LinkedIn MCP) |
-|-----------|--------------------------------|
-| Post whenever, hope for engagement | *"When do my posts get the most engagement? Analyze my last 50 posts"* |
-| Random hashtags | *"Which hashtags drive the most reach for my content?"* |
-| Wonder what resonates | *"What topics get the most comments from my audience?"* |
-| Inconsistent posting | Schedule content for optimal times automatically |
+**Example prompts that work:**
+- *"Show me my recent LinkedIn conversations"*
+- *"Send a message to [connection name] saying..."*
+- *"What was my last conversation with [person]?"*
 
-#### Key Tools for Brand Builders
-
-```
-📝 Content Creation
-├── create_post() - Publish directly from Claude
-├── create_draft() - Save ideas for later
-├── analyze_draft_content() - Get AI feedback before posting
-└── schedule_post() - Queue content for peak times
-
-📊 Performance Analytics
-├── analyze_optimal_posting_times() - Find your best windows
-├── analyze_hashtag_performance() - Optimize discoverability
-├── analyze_content_performance() - Track what works
-└── generate_engagement_report() - Full performance review
-
-🎯 Audience Intelligence
-├── get_post_comments() - Understand audience reactions
-├── get_post_reactions() - See who engages
-├── analyze_post_audience() - Demographics of engagers
-└── analyze_engagement() - Deep engagement metrics
-```
-
-#### Example Prompts for Brand Builders
-
-- *"Analyze my last 30 posts—which topics drove the most engagement?"*
-- *"What time of day should I post to maximize reach with my audience?"*
-- *"Draft a post about [topic] optimized for engagement based on what works for me"*
-- *"Schedule this post for my optimal posting time tomorrow"*
-- *"Which of my posts this month could be repurposed into a series?"*
+**Tools used:**
+- `get_conversations()` - List message threads
+- `send_message(profile_id, text)` - Send a message
 
 </details>
 
 <details>
-<summary><h3>🏢 Agency & Competitive Intelligence</h3></summary>
+<summary><h3>✍️ Content Creation</h3></summary>
 
-**Multi-account insights and competitor analysis for agency professionals.**
+**What actually works:**
 
-#### Agency-Grade Intelligence
+- Create and publish LinkedIn posts
+- Draft content for review
 
-| Manual Process | Automated with LinkedIn MCP |
-|----------------|----------------------------|
-| Weekly competitor audits | *"Compare posting frequency and engagement across these 5 competitors"* |
-| Client reporting | *"Generate an engagement report for [client profile]"* |
-| Trend spotting | *"What topics are trending in [industry] this week?"* |
-| Benchmarking | *"How does my client's engagement rate compare to competitors?"* |
+**Example prompts that work:**
+- *"Post this to LinkedIn: [your content]"*
+- *"Create a LinkedIn post about [topic]"*
 
-#### Key Tools for Agencies
+**What doesn't work:**
+- Scheduling posts (scheduler exists but untested)
+- Analyzing your past post performance
+- Seeing engagement on your posts
 
-```
-🔍 Competitive Analysis
-├── get_profile_posts() - Track competitor content
-├── analyze_content_performance() - Benchmark strategies
-├── analyze_engagement() - Compare engagement metrics
-└── search_people() - Monitor competitor teams
-
-📋 Client Management
-├── generate_engagement_report() - Automated reporting
-├── analyze_optimal_posting_times() - Client-specific insights
-├── analyze_hashtag_performance() - Strategy optimization
-└── get_post_analytics() - Detailed post breakdowns
-
-📈 Market Intelligence
-├── get_feed() - Industry trend monitoring
-├── search_companies() - Market landscape mapping
-└── batch_get_profiles() - Bulk research capabilities
-```
-
-#### Example Prompts for Agencies
-
-- *"Compare the posting strategy of [client] vs their top 3 competitors"*
-- *"Generate a monthly engagement report for [client profile]"*
-- *"What content themes are driving the most engagement in the [industry] space?"*
-- *"Track what [competitor] has posted about our client's product category"*
-- *"Create a benchmark report: my client vs industry average engagement"*
-
-</details>
-
-<details>
-<summary><h3>👥 Recruiters & Talent Acquisition</h3></summary>
-
-**Build talent pipelines with AI-powered sourcing.**
-
-#### Recruiting, Reimagined
-
-| Traditional Sourcing | AI-Powered Sourcing |
-|---------------------|---------------------|
-| Boolean searches, one at a time | *"Find senior engineers at FAANG who've posted about leaving big tech"* |
-| Manual candidate research | *"Summarize this candidate's career trajectory and recent interests"* |
-| Cold outreach fatigue | *"What does this candidate care about? Draft a personalized InMail"* |
-| Lost in spreadsheets | Integrated pipeline tracking with other MCPs |
-
-#### Key Tools for Recruiters
-
-```
-🎯 Candidate Sourcing
-├── search_people() - Advanced candidate search
-├── get_profile() - Comprehensive candidate profiles
-├── get_profile_skills() - Skills and endorsements
-├── batch_get_profiles() - Research candidate lists
-
-💬 Candidate Engagement
-├── get_profile_posts() - Understand candidate interests
-├── send_connection_request() - Personalized outreach
-├── send_message() - Direct candidate communication
-└── get_conversations() - Track outreach threads
-
-📊 Pipeline Analytics
-├── get_pending_invitations() - Monitor connection pipeline
-├── get_connections() - Your talent network
-└── get_network_stats() - Network composition
-```
-
-#### Example Prompts for Recruiters
-
-- *"Find product managers at [company] who've been in role 2+ years"*
-- *"What has this candidate posted about? What motivates them?"*
-- *"Get profiles for all engineers at [company] with ML in their title"*
-- *"Draft a personalized connection message for [candidate] based on their interests"*
-- *"Who in my network is connected to this candidate for a warm intro?"*
-
-</details>
-
-<details>
-<summary><h3>✍️ Content Creators & Thought Leaders</h3></summary>
-
-**Maximize reach and engagement with data-driven content strategies.**
-
-#### Content Strategy on Autopilot
-
-| Content Struggle | LinkedIn MCP Solution |
-|-----------------|----------------------|
-| What should I post about? | *"What topics are getting engagement in my niche this week?"* |
-| Writer's block | *"Based on my top posts, generate 5 content ideas"* |
-| Engagement drops | *"Why did my engagement drop last week? Analyze the data"* |
-| Audience mystery | *"Who's engaging with my content? Profile my active followers"* |
-
-#### Key Tools for Creators
-
-```
-📝 Content Workflow
-├── create_draft() - Save ideas and drafts
-├── analyze_draft_content() - AI-powered content review
-├── schedule_post() - Automated publishing
-└── list_scheduled_posts() - Manage content calendar
-
-📊 Deep Analytics
-├── analyze_content_performance() - Content type analysis
-├── analyze_hashtag_performance() - Hashtag ROI
-├── analyze_optimal_posting_times() - Peak engagement windows
-└── generate_engagement_report() - Comprehensive analytics
-
-🎯 Engagement Optimization
-├── get_post_comments() - Comment analysis
-├── reply_to_comment() - Community management
-├── analyze_post_audience() - Audience demographics
-└── get_post_reactions() - Reaction breakdown
-```
-
-#### Example Prompts for Creators
-
-- *"Analyze my content performance over the last 90 days—what's working?"*
-- *"Which of my posts should I turn into a content series?"*
-- *"What are the top creators in [niche] posting about this month?"*
-- *"Review this draft and suggest improvements for engagement"*
-- *"Build me a content calendar for next week based on my best-performing topics"*
+**Tools used:**
+- `create_post(text, visibility)` - Publish a post
 
 </details>
 
@@ -378,90 +204,34 @@ Add to your Claude Desktop config file:
 
 ---
 
-## Complete Tool Reference
+## Working Tools Reference
 
-<details>
-<summary><h3>View All 60+ Available Tools</h3></summary>
+### Verified Working ✅
 
-#### Diagnostic
-- `debug_context()` - Server initialization status and configuration
+| Tool | Description |
+|------|-------------|
+| `debug_context()` | Check server status |
+| `get_my_profile()` | Get your own profile |
+| `get_feed(limit)` | Browse your feed |
+| `search_people(keywords, keyword_title)` | Search for people |
+| `search_companies(keywords)` | Search for companies |
+| `get_conversations()` | List message threads |
+| `send_message(profile_id, text)` | Send a message |
+| `create_post(text, visibility)` | Create a post |
+| `send_connection_request(profile_id, message)` | Send connection invite |
 
-#### Profile Tools
-- `get_my_profile()` - Your LinkedIn profile
-- `get_profile(profile_id)` - Any profile by public ID
-- `get_profile_contact_info(profile_id)` - Contact information
-- `get_profile_skills(profile_id)` - Skills and endorsements
-- `get_profile_sections()` - Editable profile sections
-- `get_profile_completeness()` - Profile completeness score
-- `get_network_stats()` - Network size and demographics
-- `batch_get_profiles(profile_ids)` - Multiple profiles efficiently
+### Unreliable/Broken ⚠️
 
-#### Profile Management (browser automation)
-- `update_profile_headline(headline)` - Update headline
-- `update_profile_summary(summary)` - Update about section
-- `upload_profile_photo(photo_path)` - Upload profile photo
-- `upload_background_photo(photo_path)` - Upload banner photo
-- `add_profile_skill(skill_name)` - Add a skill
-- `check_browser_automation_status()` - Browser availability
+These tools exist but may not work reliably due to LinkedIn API limitations:
 
-#### Feed & Posts
-- `get_feed(limit)` - Your feed posts
-- `get_profile_posts(profile_id, limit)` - Posts from a profile
-- `create_post(text, visibility)` - Create a new post
-- `get_post_reactions(post_urn)` - Reactions on a post
-- `get_post_comments(post_urn)` - Comments on a post
-
-#### Content Creation & Scheduling
-- `analyze_draft_content(content, industry)` - Content analysis with suggestions
-- `create_draft(content, title, tags)` - Save a content draft
-- `list_drafts(tag)` - List content drafts
-- `get_draft(draft_id)` - Get a specific draft
-- `update_draft(draft_id, content, title, tags)` - Update a draft
-- `delete_draft(draft_id)` - Delete a draft
-- `publish_draft(draft_id, visibility)` - Publish a draft as a post
-- `schedule_post(content, scheduled_time, visibility, timezone)` - Schedule a post
-- `list_scheduled_posts(status)` - View scheduled posts
-- `get_scheduled_post(job_id)` - Scheduled post details
-- `update_scheduled_post(job_id, ...)` - Update scheduled post
-- `cancel_scheduled_post(job_id)` - Cancel scheduled post
-
-#### Engagement
-- `like_post(post_urn)` - Like a post
-- `react_to_post(post_urn, reaction)` - React (LIKE, CELEBRATE, SUPPORT, LOVE, INSIGHTFUL, FUNNY)
-- `unreact_to_post(post_urn)` - Remove reaction
-- `comment_on_post(post_urn, text)` - Comment on a post
-- `reply_to_comment(comment_urn, text)` - Reply to a comment
-
-#### Messaging
-- `get_conversations(limit)` - Messaging conversations
-- `get_conversation(conversation_id)` - Full conversation history
-- `send_message(profile_id, text)` - Send a direct message
-- `send_bulk_messages(profile_ids, text)` - Send to multiple recipients (max 25)
-
-#### Connections
-- `get_connections(limit)` - Your connections
-- `send_connection_request(profile_id, message)` - Send connection invite
-- `remove_connection(profile_id)` - Remove a connection
-- `get_pending_invitations(sent)` - View pending invites
-- `accept_invitation(invitation_id, shared_secret)` - Accept connection request
-- `reject_invitation(invitation_id, shared_secret)` - Reject connection request
-
-#### Search
-- `search_people(keywords, limit, connection_of, current_company)` - Search for people
-- `search_companies(keywords, limit)` - Search for companies
-
-#### Analytics
-- `get_post_analytics(post_urn)` - Engagement metrics for a post
-- `analyze_engagement(post_urn, follower_count)` - Deep engagement analysis
-- `analyze_content_performance(profile_id, post_limit)` - Content type analysis
-- `analyze_optimal_posting_times(profile_id, post_limit)` - Best times to post
-- `analyze_post_audience(post_urn)` - Audience demographics from commenters
-- `analyze_hashtag_performance(profile_id, post_limit)` - Hashtag effectiveness
-- `generate_engagement_report(profile_id, post_limit)` - Comprehensive engagement report
-- `get_rate_limit_status()` - API rate limit status
-- `get_cache_stats()` - Cache performance statistics
-
-</details>
+| Tool | Issue |
+|------|-------|
+| `get_profile(profile_id)` | Often returns API errors |
+| `get_profile_posts(profile_id)` | LinkedIn API blocks this |
+| `get_connections()` | Missing parameter bug |
+| `get_pending_invitations()` | Redirect loop |
+| `get_profile_contact_info()` | Redirect loop |
+| `analyze_*` functions | Depend on broken endpoints |
 
 ---
 
@@ -472,9 +242,6 @@ Add to your Claude Desktop config file:
 | `LINKEDIN_API_ENABLED` | `false` | Enable the LinkedIn API client |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `DATABASE_URL` | `sqlite+aiosqlite:///data/linkedin_mcp.db` | Database connection URL |
-| `FEATURE_BROWSER_FALLBACK` | `true` | Enable Playwright browser automation |
-| `FEATURE_ANALYTICS_TRACKING` | `true` | Enable analytics features |
-| `FEATURE_POST_SCHEDULING` | `true` | Enable post scheduling |
 
 ---
 
@@ -520,31 +287,6 @@ tail -f ~/.config/Claude/logs/mcp-server-linkedin.log
 
 ---
 
-## Architecture
-
-```
-linkedin-mcp/
-├── src/linkedin_mcp/
-│   ├── config/          # Settings and constants
-│   ├── core/            # Context, exceptions, logging, lifespan
-│   ├── db/              # SQLAlchemy models and repositories
-│   ├── services/
-│   │   ├── linkedin/    # LinkedIn API wrapper
-│   │   ├── browser/     # Playwright automation
-│   │   ├── scheduler/   # APScheduler integration
-│   │   └── analytics/   # Analytics processing
-│   ├── tools/           # MCP tool definitions
-│   ├── resources/       # MCP resource definitions
-│   ├── prompts/         # MCP prompt templates
-│   ├── server.py        # FastMCP server
-│   └── main.py          # Entry point
-├── scripts/             # Utility scripts
-├── tests/               # Test suite
-└── data/                # Runtime data (gitignored)
-```
-
----
-
 ## Security & Responsible Use
 
 > **Important**: This server uses the unofficial LinkedIn API which accesses LinkedIn's internal Voyager API.
@@ -586,11 +328,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [tomquirk/linkedin-api](https://github.com/tomquirk/linkedin-api) - Unofficial LinkedIn API
 - [FastMCP](https://github.com/jlowin/fastmcp) - MCP SDK for Python
 - [Model Context Protocol](https://modelcontextprotocol.io/) - AI tool protocol
-
----
-
-<p align="center">
-  <strong>Built for professionals who move fast.</strong><br>
-  <a href="https://github.com/southleft/linkedin-mcp/issues">Report Issues</a> ·
-  <a href="https://github.com/southleft/linkedin-mcp/pulls">Contribute</a>
-</p>
