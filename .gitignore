@@ -104,3 +104,6 @@ Thumbs.db
 *.pem
 *.key
 secrets/
+
+# Serena AI tool cache
+.serena/

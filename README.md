@@ -32,12 +32,13 @@ AI-powered LinkedIn analytics, content creation, and engagement automation throu
 ### Prerequisites
 - Python 3.11 or higher
 - uv (recommended) or pip
+- A LinkedIn account with active session cookies
 
 ### Setup
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/linkedin-mcp.git
+git clone https://github.com/southleft/linkedin-mcp.git
 cd linkedin-mcp
 ```
 
@@ -54,43 +55,58 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-3. Configure environment:
+3. Create the data directory:
 ```bash
-cp .env.example .env
-# Edit .env with your LinkedIn credentials
+mkdir -p data
 ```
 
-4. Install Playwright browsers (for automation fallback):
+4. Export your LinkedIn cookies (see Authentication section below)
+
+5. (Optional) Install Playwright browsers for automation fallback:
 ```bash
 playwright install chromium
 ```
 
-## Configuration
+## Authentication
 
-Create a `.env` file with your settings:
+This MCP server uses **cookie-based authentication** with LinkedIn's internal Voyager API. You'll need to export cookies from an active LinkedIn session in your browser.
 
-```bash
-# Required: LinkedIn Credentials
-LINKEDIN_EMAIL=your-email@example.com
-LINKEDIN_PASSWORD=your-secure-password
+### Exporting Cookies
 
-# Optional: Database (defaults to SQLite)
-DATABASE_URL=sqlite+aiosqlite:///./data/linkedin_mcp.db
+1. Log into LinkedIn in your browser (Chrome/Firefox)
+2. Open Developer Tools (F12 or Cmd+Option+I)
+3. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox)
+4. Find Cookies > `https://www.linkedin.com`
+5. Copy the values for:
+   - `li_at` - Your main session token
+   - `JSESSIONID` - Your session ID (include the quotes if present)
 
-# Optional: Server settings
-MCP_TRANSPORT=stdio  # or streamable-http, sse
-
-# Optional: Features
-FEATURE_BROWSER_FALLBACK=true
-FEATURE_ANALYTICS_TRACKING=true
-FEATURE_POST_SCHEDULING=true
+6. Create `data/session_cookies.json`:
+```json
+{
+  "li_at": "YOUR_LI_AT_COOKIE_VALUE",
+  "JSESSIONID": "\"ajax:1234567890123456789\""
+}
 ```
 
-## Usage
+> **Note**: The `JSESSIONID` value typically includes escaped quotes. Copy it exactly as shown in your browser.
 
-### With Claude Desktop
+### Cookie Helper Script
 
-Add to your Claude Desktop configuration (`claude_desktop_config.json`):
+Alternatively, use the included export script:
+```bash
+# This script helps format cookies correctly
+python scripts/export_cookies.py
+```
+
+## Configuration
+
+### Claude Desktop Setup
+
+Add to your Claude Desktop configuration file:
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -98,47 +114,64 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
     "linkedin": {
       "command": "uv",
       "args": ["run", "linkedin-mcp"],
-      "cwd": "/path/to/linkedin-mcp"
+      "cwd": "/absolute/path/to/linkedin-mcp",
+      "env": {
+        "LINKEDIN_API_ENABLED": "true",
+        "LOG_LEVEL": "INFO"
+      }
     }
   }
 }
 ```
 
-### Standalone
+> **Important**: The `cwd` path must be an **absolute path** to the project directory.
 
-```bash
-# Run the server
-linkedin-mcp
+### Environment Variables
 
-# Or with Python
-python -m linkedin_mcp.main
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LINKEDIN_API_ENABLED` | `false` | Enable the LinkedIn API client |
+| `LINKEDIN_EMAIL` | - | LinkedIn email (optional, for future use) |
+| `LINKEDIN_PASSWORD` | - | LinkedIn password (optional, for future use) |
+| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///data/linkedin_mcp.db` | Database connection URL |
+| `FEATURE_BROWSER_FALLBACK` | `true` | Enable Playwright browser automation |
+| `FEATURE_ANALYTICS_TRACKING` | `true` | Enable analytics features |
+| `FEATURE_POST_SCHEDULING` | `true` | Enable post scheduling |
 
-## Available Tools
+## Usage
 
-### Authentication
-- `check_auth_status()` - Check authentication status
-- `login()` - Authenticate with LinkedIn
+### Verifying Setup
 
-### Profile Tools
-- `get_own_profile()` - Get your LinkedIn profile
+After configuring Claude Desktop, restart the application and try:
+
+1. **Check server status**: Ask Claude to use the `debug_context` tool
+2. **Test authentication**: Ask Claude to use `get_my_profile`
+
+If you see "LinkedIn client not initialized", check:
+- `LINKEDIN_API_ENABLED` is set to `"true"` (as a string)
+- `data/session_cookies.json` exists with valid cookies
+- The `cwd` path in Claude Desktop config is absolute
+
+### Available Tools
+
+#### Diagnostic
+- `debug_context()` - Check server initialization status
+
+#### Profile Tools
+- `get_my_profile()` - Get your LinkedIn profile
 - `get_profile(profile_id)` - Get any profile by ID
 - `get_profile_sections()` - View editable profile sections
 - `get_profile_completeness()` - Calculate profile completeness score
-- `update_profile_headline(headline)` - Update headline (browser)
-- `update_profile_summary(summary)` - Update about section (browser)
-- `upload_profile_photo(path)` - Upload profile photo (browser)
-- `upload_background_photo(path)` - Upload banner photo (browser)
-- `add_profile_skill(skill)` - Add a skill (browser)
 
-### Feed & Posts
+#### Feed & Posts
 - `get_feed(limit)` - Get your feed posts
 - `get_profile_posts(profile_id, limit)` - Get posts from a profile
 - `get_post_details(post_urn)` - Get detailed post information
 - `get_post_reactions(post_urn)` - Get reactions on a post
 - `get_post_comments(post_urn)` - Get comments on a post
 
-### Content Creation
+#### Content Creation
 - `create_post(text, visibility)` - Create a new post
 - `schedule_post(content, time, visibility)` - Schedule a post
 - `list_scheduled_posts(status)` - View scheduled posts
@@ -147,13 +180,13 @@ python -m linkedin_mcp.main
 - `list_drafts(tag)` - List content drafts
 - `analyze_draft(content)` - Get content improvement suggestions
 
-### Engagement
+#### Engagement
 - `react_to_post(post_urn, reaction_type)` - React to a post
 - `unreact_to_post(post_urn)` - Remove reaction from a post
 - `comment_on_post(post_urn, text)` - Comment on a post
 - `reply_to_comment(comment_urn, text)` - Reply to a comment
 
-### Messaging & Connections
+#### Messaging & Connections
 - `send_message(profile_id, text)` - Send a direct message
 - `send_bulk_messages(profile_ids, text)` - Send to multiple recipients
 - `get_connections(limit)` - Get your connections
@@ -163,10 +196,10 @@ python -m linkedin_mcp.main
 - `accept_invitation(id, secret)` - Accept connection request
 - `reject_invitation(id, secret)` - Reject connection request
 
-### Search
+#### Search
 - `search_linkedin(keywords, type, limit)` - Search people, jobs, companies
 
-### Analytics
+#### Analytics
 - `analyze_post_engagement(reactions, comments, shares)` - Engagement metrics
 - `analyze_content(content)` - Content optimization analysis
 - `analyze_posting_patterns(posts)` - Find optimal posting times
@@ -190,9 +223,9 @@ linkedin-mcp/
 │   ├── prompts/         # MCP prompt templates
 │   ├── server.py        # FastMCP server
 │   └── main.py          # Entry point
+├── scripts/             # Utility scripts
 ├── tests/               # Test suite
-├── docs/                # Documentation
-└── data/                # SQLite database and browser state
+└── data/                # Runtime data (gitignored)
 ```
 
 ## Development
@@ -213,14 +246,48 @@ ruff format src/
 mypy src/linkedin_mcp
 ```
 
+### Running Locally
+```bash
+# Start the MCP server directly
+uv run linkedin-mcp
+
+# Or with Python
+python -m linkedin_mcp.main
+```
+
+## Troubleshooting
+
+### "LinkedIn client not initialized"
+
+1. Ensure `LINKEDIN_API_ENABLED=true` in your Claude Desktop config
+2. Verify `data/session_cookies.json` exists and contains valid cookies
+3. Check that cookies haven't expired (re-export from browser if needed)
+4. Verify the `cwd` path is absolute, not relative
+
+### Cookies expire frequently
+
+LinkedIn session cookies typically last 1-2 weeks. If you're getting authentication errors:
+1. Log into LinkedIn in your browser
+2. Re-export the `li_at` and `JSESSIONID` cookies
+3. Update `data/session_cookies.json`
+4. Restart Claude Desktop
+
+### MCP server logs
+
+View server logs on macOS:
+```bash
+tail -f ~/Library/Logs/Claude/mcp-server-linkedin.log
+```
+
 ## Security Notice
 
 ⚠️ **Important**: This server uses the unofficial LinkedIn API which accesses LinkedIn's internal Voyager API. Use responsibly:
 
-- Use a secondary LinkedIn account for testing
+- **Use a secondary LinkedIn account for testing**
 - Respect rate limits (~900 requests/hour)
 - Don't spam or automate engagement excessively
 - Your account may be restricted if LinkedIn detects automation
+- **Never commit your `data/` directory or cookie files**
 
 ## License
 
