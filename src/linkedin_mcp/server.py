@@ -6,11 +6,14 @@ Main FastMCP server definition with all tools, resources, and prompts.
 
 from fastmcp import FastMCP
 
-# Create FastMCP server instance with defaults
+from linkedin_mcp.core.lifespan import lifespan
+
+# Create FastMCP server instance with lifespan for proper initialization
 mcp = FastMCP(
     name="LinkedIn Intelligence MCP",
     instructions="AI-powered LinkedIn analytics, content creation, and engagement automation.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -140,41 +143,150 @@ async def get_my_profile() -> dict:
 
 
 @mcp.tool()
-async def get_profile(profile_id: str, use_cache: bool = True) -> dict:
+async def get_profile(
+    profile_id: str,
+    use_cache: bool = True,
+    include_activity: bool = True,
+    include_network: bool = True,
+    include_badges: bool = True,
+) -> dict:
     """
-    Get a LinkedIn profile by public ID or URN.
+    Get comprehensive LinkedIn profile data with multi-source enrichment.
+
+    Uses the Profile Enrichment Engine to aggregate data from multiple endpoints
+    in parallel, providing the most complete profile information available.
 
     Args:
         profile_id: LinkedIn public ID (e.g., "johndoe") or URN
         use_cache: Whether to use cached data if available (default: True)
+        include_activity: Include recent activity/posts (default: True)
+        include_network: Include network stats like connections/followers (default: True)
+        include_badges: Include member badges like Premium status (default: True)
 
-    Returns profile data including experience, education, and skills.
+    Returns comprehensive profile data including:
+    - Basic info (name, headline, location, photo)
+    - Contact information (if available)
+    - Skills and endorsements
+    - Network information (connections, followers, distance)
+    - Member badges (Premium, Creator, etc.)
+    - Recent activity summary
+    - Enrichment metadata showing data sources used
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.browser import get_browser_automation
     from linkedin_mcp.services.cache import CacheService, get_cache
+    from linkedin_mcp.services.profile import ProfileEnrichmentEngine
 
     logger = get_logger(__name__)
     ctx = get_context()
     cache = get_cache()
+    browser = get_browser_automation()
 
     if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
+        return {
+            "error": "LinkedIn client not initialized",
+            "reason": "No valid LinkedIn session cookies found.",
+            "fix": "Run: linkedin-mcp-auth extract-cookies --browser chrome",
+            "note": (
+                "The LinkedIn MCP requires authentication via browser cookies. "
+                "Make sure you're logged into LinkedIn in Chrome, then run the command above."
+            ),
+        }
 
-    cache_key = cache.make_key("profile", profile_id)
+    # Create cache key that includes enrichment options
+    cache_key = cache.make_key(
+        "enriched_profile",
+        profile_id,
+        f"activity={include_activity}",
+        f"network={include_network}",
+        f"badges={include_badges}",
+    )
 
     try:
+        # Check cache first
         if use_cache:
             cached_data = await cache.get(cache_key)
             if cached_data:
+                logger.debug("Returning cached enriched profile", profile_id=profile_id)
                 return {"success": True, "profile": cached_data, "cached": True}
 
-        profile = await ctx.linkedin_client.get_profile(profile_id)
-        await cache.set(cache_key, profile, CacheService.TTL_PROFILE)
-        return {"success": True, "profile": profile, "cached": False}
+        # Use Profile Enrichment Engine for comprehensive data
+        # Pass browser automation for DOM scraping (most reliable source)
+        engine = ProfileEnrichmentEngine(ctx.linkedin_client, browser)
+        enriched_profile = await engine.get_enriched_profile(
+            public_id=profile_id,
+            include_activity=include_activity,
+            include_network=include_network,
+            include_badges=include_badges,
+        )
+
+        # Cache the enriched result
+        await cache.set(cache_key, enriched_profile, CacheService.TTL_PROFILE)
+
+        # Check if we got meaningful data
+        sources_successful = enriched_profile.get("_enrichment", {}).get("sources_successful", [])
+        has_data = (
+            enriched_profile.get("firstName")
+            or enriched_profile.get("lastName")
+            or enriched_profile.get("headline")
+            or len(sources_successful) > 1
+        )
+
+        if has_data:
+            return {
+                "success": True,
+                "profile": enriched_profile,
+                "cached": False,
+            }
+        else:
+            # Provide guidance for limited data scenarios
+            # LinkedIn's aggressive bot detection often blocks API access
+            browser_available = browser and browser.is_available
+            return {
+                "success": True,
+                "profile": enriched_profile,
+                "cached": False,
+                "data_limited": True,
+                "reason": (
+                    "LinkedIn has blocked API access due to bot detection. "
+                    "This is common behavior from LinkedIn's security systems."
+                ),
+                "what_worked": sources_successful,
+                "profile_url": f"https://www.linkedin.com/in/{profile_id}/",
+                "suggestions": [
+                    "Re-authenticate: Run 'linkedin-mcp-auth extract-cookies --browser chrome' to refresh cookies",
+                    "Use Official API: For your own profile, use get_my_profile() which uses OAuth",
+                    "Install Playwright: Run 'playwright install chromium' to enable browser automation",
+                ] + ([
+                    "Browser automation is available but LinkedIn may still block access",
+                ] if browser_available else []),
+            }
+
     except Exception as e:
-        logger.error("Failed to fetch profile", error=str(e), profile_id=profile_id)
-        return {"error": str(e)}
+        logger.error(
+            "Profile enrichment failed",
+            error=str(e),
+            profile_id=profile_id,
+        )
+        # Check for common error patterns
+        error_str = str(e).lower()
+        if "redirect" in error_str or "302" in error_str:
+            reason = "LinkedIn session expired or was invalidated by LinkedIn's security systems."
+            fix = "Run: linkedin-mcp-auth extract-cookies --browser chrome"
+        elif "timeout" in error_str:
+            reason = "LinkedIn request timed out. Their servers may be slow or blocking requests."
+            fix = "Try again in a few minutes, or refresh cookies."
+        else:
+            reason = "Unexpected error occurred during profile fetch."
+            fix = "Check logs for details and try refreshing cookies."
+
+        return {
+            "error": str(e),
+            "reason": reason,
+            "fix": fix,
+            "profile_url": f"https://www.linkedin.com/in/{profile_id}/",
+        }
 
 
 @mcp.tool()
@@ -1832,60 +1944,7 @@ async def get_company_updates(public_id: str, limit: int = 10) -> dict:
 # Lead Generation Tools
 # =============================================================================
 
-
-@mcp.tool()
-async def get_profile_contact_info(public_id: str) -> dict:
-    """
-    Get contact information for a LinkedIn profile.
-
-    Args:
-        public_id: Profile's public identifier (URL slug)
-
-    Returns contact details including email addresses, phone numbers, websites, etc.
-    Note: Only returns data the profile owner has made visible.
-    """
-    from linkedin_mcp.core.context import get_context
-    from linkedin_mcp.core.logging import get_logger
-
-    logger = get_logger(__name__)
-    ctx = get_context()
-
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
-    try:
-        contact_info = await ctx.linkedin_client.get_profile_contact_info(public_id)
-        return {"success": True, "contact_info": contact_info}
-    except Exception as e:
-        logger.error("Failed to fetch contact info", error=str(e), public_id=public_id)
-        return {"error": str(e)}
-
-
-@mcp.tool()
-async def get_profile_skills(public_id: str) -> dict:
-    """
-    Get skills listed on a LinkedIn profile.
-
-    Args:
-        public_id: Profile's public identifier (URL slug)
-
-    Returns list of skills with endorsement counts.
-    """
-    from linkedin_mcp.core.context import get_context
-    from linkedin_mcp.core.logging import get_logger
-
-    logger = get_logger(__name__)
-    ctx = get_context()
-
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
-    try:
-        skills = await ctx.linkedin_client.get_profile_skills(public_id)
-        return {"success": True, "skills": skills, "count": len(skills)}
-    except Exception as e:
-        logger.error("Failed to fetch skills", error=str(e), public_id=public_id)
-        return {"error": str(e)}
+# Note: get_profile_contact_info and get_profile_skills are defined in Profile Tools section
 
 
 @mcp.tool()

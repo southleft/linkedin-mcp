@@ -371,6 +371,167 @@ class BrowserAutomation:
             logger.error("Failed to take screenshot", error=str(e))
             return {"success": False, "error": str(e)}
 
+    async def scrape_profile(self, profile_id: str) -> dict[str, Any]:
+        """
+        Scrape comprehensive profile data directly from LinkedIn page.
+
+        NOTE: This requires an active LinkedIn session in Playwright.
+        LinkedIn blocks headless browsers with session cookies from other browsers.
+        For best results, use Claude in Chrome's tools to scrape the profile
+        directly from the user's logged-in browser session.
+
+        Args:
+            profile_id: LinkedIn public ID (e.g., "johndoe")
+
+        Returns:
+            Profile data extracted from the page
+        """
+        if not self._page:
+            return {"success": False, "error": "Browser not available"}
+
+        try:
+            logger.info("Scraping profile via browser", profile_id=profile_id)
+
+            # Navigate to profile
+            url = f"https://www.linkedin.com/in/{profile_id}/"
+            await self._page.goto(url, wait_until="networkidle")
+            await asyncio.sleep(2)  # Wait for dynamic content
+
+            # Extract profile data using JavaScript
+            profile_data = await self._page.evaluate("""
+                () => {
+                    const profile = { public_id: window.location.pathname.split('/in/')[1]?.replace('/', '') };
+
+                    // Name - multiple selectors for reliability
+                    const nameEl = document.querySelector('h1.text-heading-xlarge') ||
+                                   document.querySelector('h1.inline.t-24') ||
+                                   document.querySelector('.pv-top-card--list li:first-child');
+                    if (nameEl) {
+                        const fullName = nameEl.textContent.trim();
+                        const parts = fullName.split(' ');
+                        profile.firstName = parts[0] || '';
+                        profile.lastName = parts.slice(1).join(' ') || '';
+                        profile.displayName = fullName;
+                    }
+
+                    // Headline
+                    const headlineEl = document.querySelector('div.text-body-medium.break-words') ||
+                                       document.querySelector('.pv-top-card--list-bullet + p') ||
+                                       document.querySelector('.ph5.pb5 .text-body-medium');
+                    if (headlineEl) profile.headline = headlineEl.textContent.trim();
+
+                    // Location
+                    const locationEl = document.querySelector('span.text-body-small.inline.t-black--light.break-words') ||
+                                       document.querySelector('.pv-top-card--list-bullet li:first-child');
+                    if (locationEl) profile.locationName = locationEl.textContent.trim();
+
+                    // Profile photo
+                    const photoEl = document.querySelector('img.pv-top-card-profile-picture__image') ||
+                                    document.querySelector('.profile-photo-edit__preview img') ||
+                                    document.querySelector('img[alt*="profile photo"]');
+                    if (photoEl) profile.profilePicture = photoEl.src;
+
+                    // About/Summary section
+                    const aboutSection = document.querySelector('#about ~ .display-flex .inline-show-more-text span[aria-hidden="true"]') ||
+                                         document.querySelector('.pv-about-section .pv-about__summary-text');
+                    if (aboutSection) profile.summary = aboutSection.textContent.trim();
+
+                    // Connection count
+                    const connectionsEl = document.querySelector('a[href*="/connections/"] span') ||
+                                          document.querySelector('li.text-body-small span.t-bold');
+                    if (connectionsEl) {
+                        const text = connectionsEl.textContent.trim();
+                        const match = text.match(/([\\d,]+)/);
+                        if (match) profile.connections_count = parseInt(match[1].replace(',', ''));
+                    }
+
+                    // Follower count
+                    const followersEl = document.querySelector('a.link-without-visited-state span') ||
+                                        document.querySelector('[href*="followers"] span');
+                    if (followersEl) {
+                        const text = followersEl.textContent.trim();
+                        const match = text.match(/([\\d,]+)/);
+                        if (match) profile.followers_count = parseInt(match[1].replace(',', ''));
+                    }
+
+                    // Experience - current position
+                    const experienceSection = document.querySelector('#experience ~ .pvs-list__outer-container');
+                    if (experienceSection) {
+                        const currentRole = experienceSection.querySelector('.display-flex.flex-row');
+                        if (currentRole) {
+                            const roleTitle = currentRole.querySelector('.hoverable-link-text span[aria-hidden="true"]');
+                            const company = currentRole.querySelector('.t-normal span[aria-hidden="true"]');
+                            if (roleTitle) profile.currentPosition = roleTitle.textContent.trim();
+                            if (company) profile.currentCompany = company.textContent.trim();
+                        }
+                    }
+
+                    // Education
+                    const educationSection = document.querySelector('#education ~ .pvs-list__outer-container');
+                    if (educationSection) {
+                        const schools = [];
+                        const items = educationSection.querySelectorAll('.pvs-list__item--line-separated');
+                        items.forEach((item, i) => {
+                            if (i < 3) {
+                                const name = item.querySelector('.hoverable-link-text span[aria-hidden="true"]');
+                                const degree = item.querySelector('.t-normal span[aria-hidden="true"]');
+                                if (name) schools.push({
+                                    name: name.textContent.trim(),
+                                    degree: degree ? degree.textContent.trim() : ''
+                                });
+                            }
+                        });
+                        if (schools.length > 0) profile.education = schools;
+                    }
+
+                    // Skills (if visible on profile)
+                    const skillsSection = document.querySelector('#skills ~ .pvs-list__outer-container');
+                    if (skillsSection) {
+                        const skills = [];
+                        const items = skillsSection.querySelectorAll('.pvs-list__item--one-column');
+                        items.forEach((item, i) => {
+                            if (i < 10) {
+                                const name = item.querySelector('.hoverable-link-text span[aria-hidden="true"]');
+                                const endorsements = item.querySelector('.t-black--light span[aria-hidden="true"]');
+                                if (name) skills.push({
+                                    name: name.textContent.trim(),
+                                    endorsementCount: endorsements ? parseInt(endorsements.textContent) || 0 : 0
+                                });
+                            }
+                        });
+                        if (skills.length > 0) profile.skills = skills;
+                    }
+
+                    // Premium badge
+                    profile.is_premium = !!document.querySelector('.premium-icon, [data-test-premium-badge]');
+
+                    // Creator badge
+                    profile.is_creator = !!document.querySelector('[data-test-creator-badge], .creator-badge');
+
+                    // Open to work badge
+                    profile.open_to_work = !!document.querySelector('.pv-open-to-work-badge, #OPEN_TO_WORK');
+
+                    return profile;
+                }
+            """)
+
+            logger.info(
+                "Profile scraped successfully",
+                profile_id=profile_id,
+                has_name=bool(profile_data.get('displayName')),
+                has_headline=bool(profile_data.get('headline')),
+            )
+
+            return {
+                "success": True,
+                "profile": profile_data,
+                "source": "browser_scrape",
+            }
+
+        except Exception as e:
+            logger.error("Failed to scrape profile", error=str(e))
+            return {"success": False, "error": str(e)}
+
 
 # Global instance
 _browser_automation: BrowserAutomation | None = None

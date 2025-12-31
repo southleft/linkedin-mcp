@@ -363,9 +363,49 @@ class LinkedInClient:
         return await self._execute(self._client.get_user_profile)
 
     async def get_profile_connections(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Get user's connections."""
+        """Get user's connections.
+
+        First fetches the authenticated user's profile to get their URN,
+        then retrieves their connections.
+        """
         logger.info("Fetching connections", limit=limit)
-        return await self._execute(self._client.get_profile_connections, limit=limit)
+
+        # First get the user's own profile to extract their URN
+        own_profile = await self._execute(self._client.get_user_profile)
+
+        # Extract URN from profile - it can be in different fields
+        urn_id = None
+        if own_profile:
+            # First check miniProfile (where LinkedIn usually puts the data)
+            mini_profile = own_profile.get("miniProfile", {})
+
+            # Try different possible URN locations
+            urn_id = (
+                own_profile.get("member_urn")
+                or own_profile.get("entityUrn")
+                or own_profile.get("urn_id")
+                or mini_profile.get("entityUrn")
+                or mini_profile.get("objectUrn")
+            )
+
+            # If URN is in format "urn:li:member:123456" or "urn:li:fs_miniProfile:...", extract just the ID
+            if urn_id and ":" in str(urn_id):
+                urn_id = str(urn_id).split(":")[-1]
+
+            # Also try public_id if URN not found
+            if not urn_id:
+                urn_id = (
+                    own_profile.get("public_id")
+                    or own_profile.get("publicIdentifier")
+                    or mini_profile.get("publicIdentifier")
+                )
+
+        if not urn_id:
+            logger.error("Could not extract URN from own profile", profile_keys=list(own_profile.keys()) if own_profile else [])
+            raise LinkedInAPIError("Could not determine user URN for fetching connections")
+
+        logger.info("Got user URN for connections", urn_id=urn_id)
+        return await self._execute(self._client.get_profile_connections, urn_id=urn_id)
 
     async def get_profile_contact_info(self, public_id: str) -> dict[str, Any]:
         """Get profile contact information."""
@@ -797,6 +837,75 @@ class LinkedInClient:
         return await self._execute(
             self._client.remove_connection,
             invitation_id,
+        )
+
+    # ==========================================================================
+    # Profile Enrichment Methods (for comprehensive profile data)
+    # ==========================================================================
+
+    async def get_profile_network_info(self, public_id: str) -> dict[str, Any]:
+        """
+        Get network information for a profile.
+
+        Returns connections count, followers count, network distance, and followability.
+
+        Args:
+            public_id: Profile's public identifier
+
+        Returns:
+            Network info including connections, followers, distance
+        """
+        logger.info("Fetching profile network info", public_id=public_id)
+        return await self._execute(self._client.get_profile_network_info, public_id)
+
+    async def get_profile_member_badges(self, public_id: str) -> dict[str, Any]:
+        """
+        Get member badges for a profile (Premium, Creator, etc.).
+
+        Args:
+            public_id: Profile's public identifier
+
+        Returns:
+            Badge information
+        """
+        logger.info("Fetching profile badges", public_id=public_id)
+        return await self._execute(self._client.get_profile_member_badges, public_id)
+
+    async def get_profile_privacy_settings(self, public_id: str) -> dict[str, Any]:
+        """
+        Get privacy settings for a profile.
+
+        Useful for understanding what data might be restricted.
+
+        Args:
+            public_id: Profile's public identifier
+
+        Returns:
+            Privacy settings data
+        """
+        logger.info("Fetching profile privacy settings", public_id=public_id)
+        return await self._execute(self._client.get_profile_privacy_settings, public_id)
+
+    async def get_profile_updates(
+        self,
+        public_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Get activity updates for a profile.
+
+        Args:
+            public_id: Profile's public identifier
+            limit: Maximum updates to retrieve
+
+        Returns:
+            List of profile activity updates
+        """
+        logger.info("Fetching profile updates", public_id=public_id, limit=limit)
+        return await self._execute(
+            self._client.get_profile_updates,
+            public_id=public_id,
+            max_results=limit,
         )
 
     # ==========================================================================

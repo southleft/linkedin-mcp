@@ -21,6 +21,7 @@ from linkedin_mcp.core.logging import configure_logging, get_logger
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from fastmcp import FastMCP
     from playwright.async_api import Browser, BrowserContext
     from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -439,7 +440,7 @@ async def shutdown_services(ctx: AppContext) -> None:
 
 
 @asynccontextmanager
-async def lifespan() -> AsyncGenerator[AppContext, None]:
+async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
     """
     Server lifespan context manager.
 
@@ -519,6 +520,16 @@ async def lifespan() -> AsyncGenerator[AppContext, None]:
             logger.warning("Browser initialization failed", error=str(browser_result))
         elif browser_result != (None, None):
             ctx.browser, ctx.browser_context = browser_result
+
+            # Initialize BrowserAutomation wrapper for profile scraping
+            from linkedin_mcp.services.browser import BrowserAutomation, set_browser_automation
+            automation = BrowserAutomation(
+                browser=ctx.browser,
+                context=ctx.browser_context,
+            )
+            await automation.initialize()
+            set_browser_automation(automation)
+            logger.info("Browser automation initialized for profile scraping")
 
         # Start scheduler if available
         if ctx.scheduler:
