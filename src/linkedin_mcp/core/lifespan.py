@@ -388,6 +388,80 @@ async def init_browser(settings: Settings) -> tuple["Browser | None", "BrowserCo
         return None, None
 
 
+async def init_data_provider(
+    settings: Settings,
+    primary_client: Any | None = None,
+) -> Any:
+    """
+    Initialize the LinkedIn data provider with automatic fallback.
+
+    The data provider orchestrates between multiple data sources:
+    1. Primary: tomquirk/linkedin-api (fastest, most features)
+    2. Secondary: Enhanced HTTP client with curl_cffi (anti-detection)
+    3. Tertiary: Headless browser scraper (most reliable, slowest)
+
+    Args:
+        settings: Application settings
+        primary_client: Optional pre-initialized linkedin-api client
+
+    Returns:
+        Initialized LinkedInDataProvider, or None if no cookies available
+    """
+    from linkedin_mcp.services.storage.token_storage import get_unofficial_cookies
+
+    # Get cookies for fallback clients
+    cookies = get_unofficial_cookies()
+
+    if not cookies and not primary_client:
+        logger.info(
+            "Data provider disabled - no cookies or primary client available",
+            recommendation="Run: linkedin-mcp-auth extract-cookies",
+        )
+        return None
+
+    try:
+        from linkedin_mcp.services.linkedin.data_provider import LinkedInDataProvider
+
+        # Prepare cookies dict for fallback clients
+        cookie_dict = {}
+        if cookies:
+            cookie_dict["li_at"] = cookies.li_at
+            if cookies.jsessionid:
+                cookie_dict["JSESSIONID"] = cookies.jsessionid
+
+        # Get the underlying linkedin-api client if available
+        underlying_client = None
+        if primary_client and hasattr(primary_client, "_client"):
+            underlying_client = primary_client._client
+
+        # Create data provider with fallback chain
+        provider = LinkedInDataProvider(
+            primary_client=underlying_client,
+            cookies=cookie_dict,
+            enable_enhanced=settings.features.browser_fallback,  # Use same setting
+            enable_headless=settings.features.browser_fallback,
+        )
+
+        await provider.initialize()
+
+        logger.info(
+            "Data provider initialized with fallback chain",
+            primary=underlying_client is not None,
+            cookies_available=bool(cookie_dict),
+            enhanced_enabled=settings.features.browser_fallback,
+            headless_enabled=settings.features.browser_fallback,
+        )
+
+        return provider
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize data provider",
+            error=str(e),
+        )
+        return None
+
+
 async def shutdown_services(ctx: AppContext) -> None:
     """
     Gracefully shutdown all services.
@@ -435,6 +509,14 @@ async def shutdown_services(ctx: AppContext) -> None:
             await ctx.linkedin_client.close()
         except Exception as e:
             logger.warning("Error closing LinkedIn client", error=str(e))
+
+    # Close data provider (includes enhanced client and headless scraper)
+    if ctx.data_provider:
+        logger.debug("Closing data provider")
+        try:
+            await ctx.data_provider.close()
+        except Exception as e:
+            logger.warning("Error closing data provider", error=str(e))
 
     logger.info("All services shut down")
 
@@ -531,6 +613,17 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             set_browser_automation(automation)
             logger.info("Browser automation initialized for profile scraping")
 
+        # Initialize data provider with fallback chain (after linkedin client is ready)
+        # This provides automatic fallback: primary → enhanced (curl_cffi) → headless
+        try:
+            data_provider_result = await init_data_provider(
+                settings=settings,
+                primary_client=ctx.linkedin_client,
+            )
+            ctx.data_provider = data_provider_result
+        except Exception as e:
+            logger.warning("Data provider initialization failed", error=str(e))
+
         # Start scheduler if available
         if ctx.scheduler:
             ctx.scheduler.start()
@@ -543,6 +636,7 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             "Server initialized successfully",
             official_api=ctx.has_official_client,
             unofficial_api=ctx.has_linkedin_client,
+            data_provider=ctx.has_data_provider,
             database=ctx.has_database,
             scheduler=ctx.has_scheduler,
             browser=ctx.has_browser,

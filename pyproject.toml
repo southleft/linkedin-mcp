@@ -44,6 +44,9 @@ dependencies = [
     "httpx>=0.28.0",
     "aiofiles>=24.1.0",
 
+    # Anti-detection HTTP client (TLS fingerprint spoofing)
+    "curl_cffi>=0.7.0",
+
     # Utilities
     "structlog>=24.4.0",
     "tenacity>=9.0.0",
@@ -61,6 +64,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Undetected browser automation (Patchright = stealth Playwright fork)
+stealth = [
+    "patchright>=1.49.0",
+]
+
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",

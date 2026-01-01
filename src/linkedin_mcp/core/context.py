@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
     from linkedin_mcp.config.settings import Settings
+    from linkedin_mcp.services.linkedin.data_provider import LinkedInDataProvider
     from linkedin_mcp.services.linkedin.official_client import LinkedInOfficialClient
 
 
@@ -43,6 +44,9 @@ class AppContext:
 
     # LinkedIn Official API client (OAuth 2.0) - Official, reliable for basic profile
     official_client: "LinkedInOfficialClient | None" = None
+
+    # LinkedIn Data Provider with automatic fallback (primary → enhanced → headless)
+    data_provider: "LinkedInDataProvider | None" = None
 
     # Database
     db_engine: "AsyncEngine | None" = None
@@ -102,6 +106,11 @@ class AppContext:
             and self.browser_context is not None
             and self.settings.features.browser_fallback
         )
+
+    @property
+    def has_data_provider(self) -> bool:
+        """Check if data provider with fallback is available."""
+        return self.data_provider is not None
 
     def get_db_session(self) -> "AsyncSession":
         """

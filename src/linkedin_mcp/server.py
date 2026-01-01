@@ -1708,8 +1708,9 @@ async def get_conversations(limit: int = 20) -> dict:
         conversations = await ctx.linkedin_client.get_conversations()
         return {"success": True, "conversations": conversations[:limit], "count": min(len(conversations), limit)}
     except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to fetch conversations", error=str(e))
-        return {"error": str(e)}
+        return format_error_response(e)
 
 
 @mcp.tool()
@@ -1815,8 +1816,9 @@ async def search_people(
         )
         return {"success": True, "results": results, "count": len(results)}
     except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to search", error=str(e))
-        return {"error": str(e)}
+        return format_error_response(e)
 
 
 @mcp.tool()
@@ -1845,8 +1847,9 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
         results = await ctx.linkedin_client.search_companies(keywords=keywords, limit=limit)
         return {"success": True, "results": results, "count": len(results)}
     except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to search companies", error=str(e))
-        return {"error": str(e)}
+        return format_error_response(e)
 
 
 @mcp.tool()
@@ -1874,8 +1877,9 @@ async def get_connections(limit: int = 50) -> dict:
         connections = await ctx.linkedin_client.get_profile_connections(limit=limit)
         return {"success": True, "connections": connections, "count": len(connections)}
     except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to fetch connections", error=str(e))
-        return {"error": str(e)}
+        return format_error_response(e)
 
 
 # =============================================================================
@@ -1906,8 +1910,9 @@ async def get_company(public_id: str) -> dict:
         company = await ctx.linkedin_client.get_company(public_id)
         return {"success": True, "company": company}
     except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to fetch company", error=str(e), public_id=public_id)
-        return {"error": str(e)}
+        return format_error_response(e)
 
 
 @mcp.tool()

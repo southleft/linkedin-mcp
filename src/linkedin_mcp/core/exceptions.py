@@ -256,3 +256,110 @@ class ValidationError(LinkedInMCPError):
         super().__init__(message, details=details)
         self.field = field
         self.value = value
+
+
+# =============================================================================
+# Error Interpretation Utility
+# =============================================================================
+
+# Common error patterns and their user-friendly translations
+ERROR_PATTERNS: list[tuple[str, str, str]] = [
+    # (pattern to match, user-friendly message, suggestion)
+    (
+        "Expecting value: line 1 column 1",
+        "LinkedIn blocked this request",
+        "Try refreshing cookies: linkedin-mcp-auth extract-cookies"
+    ),
+    (
+        "Exceeded 30 redirects",
+        "LinkedIn session redirect loop detected",
+        "Re-authenticate: linkedin-mcp-auth extract-cookies --browser chrome"
+    ),
+    (
+        "RetryError",
+        "LinkedIn is temporarily blocking API access",
+        "Wait a few minutes and try again, or use official API tools instead"
+    ),
+    (
+        "JSONDecodeError",
+        "LinkedIn returned invalid data (likely bot detection)",
+        "Refresh cookies or try official API tools"
+    ),
+    (
+        "401",
+        "Authentication expired or invalid",
+        "Re-authenticate: linkedin-mcp-auth oauth --force"
+    ),
+    (
+        "403",
+        "Access forbidden - LinkedIn is blocking this request",
+        "This feature may require additional permissions or is blocked by LinkedIn"
+    ),
+    (
+        "429",
+        "Rate limit exceeded",
+        "Wait before making more requests"
+    ),
+    (
+        "timeout",
+        "Request timed out",
+        "LinkedIn may be slow or blocking requests. Try again later"
+    ),
+    (
+        "connection",
+        "Connection error",
+        "Check your internet connection and try again"
+    ),
+    (
+        "CHALLENGE",
+        "LinkedIn security challenge triggered",
+        "Log into LinkedIn in your browser to verify your account, then refresh cookies"
+    ),
+]
+
+
+def interpret_error(error: str | Exception) -> dict[str, str]:
+    """
+    Interpret a technical error and return user-friendly information.
+
+    Args:
+        error: The error message or exception
+
+    Returns:
+        Dict with 'message', 'suggestion', and 'technical' keys
+    """
+    error_str = str(error).lower()
+    original_error = str(error)
+
+    for pattern, message, suggestion in ERROR_PATTERNS:
+        if pattern.lower() in error_str:
+            return {
+                "message": message,
+                "suggestion": suggestion,
+                "technical": original_error,
+            }
+
+    # Default response for unrecognized errors
+    return {
+        "message": "An unexpected error occurred",
+        "suggestion": "Check the technical details or try again later",
+        "technical": original_error,
+    }
+
+
+def format_error_response(error: str | Exception) -> dict[str, Any]:
+    """
+    Format an error for API response with user-friendly messaging.
+
+    Args:
+        error: The error message or exception
+
+    Returns:
+        Dict suitable for returning as an error response
+    """
+    interpreted = interpret_error(error)
+    return {
+        "error": interpreted["message"],
+        "suggestion": interpreted["suggestion"],
+        "details": interpreted["technical"],
+    }

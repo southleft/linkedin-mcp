@@ -39,14 +39,19 @@ A Model Context Protocol (MCP) server that connects Claude to LinkedIn for conte
 
 **LinkedIn actively blocks unofficial API access.** The following features are currently unreliable due to LinkedIn's bot detection:
 
-- ❌ Search (people/companies)
-- ❌ Connection management
-- ❌ Feed browsing
-- ❌ Messaging
-- ❌ Network statistics
-- ❌ Company research
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Search people | ❌ Blocked | LinkedIn redirect loops |
+| Search companies | ❌ Blocked | LinkedIn redirect loops |
+| Connection list | ❌ Blocked | Use official API for own profile |
+| Feed browsing | ❌ Blocked | No current workaround |
+| Messaging | ❌ Blocked | LinkedIn security restrictions |
+| Network statistics | ❌ Blocked | Limited data available |
+| Company details | ❌ Blocked | No current workaround |
 
-These use the `tomquirk/linkedin-api` library which LinkedIn frequently blocks. We're exploring alternatives.
+**Profile viewing has a fallback:** When the API is blocked, the server automatically falls back to browser automation with anti-detection measures (curl_cffi TLS fingerprinting + Playwright headless browser).
+
+These use the `tomquirk/linkedin-api` library which LinkedIn frequently blocks. **When blocked, errors include helpful suggestions for resolving the issue.**
 
 ---
 
@@ -361,6 +366,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [tomquirk/linkedin-api](https://github.com/tomquirk/linkedin-api) - LinkedIn API library
 - [FastMCP](https://github.com/jlowin/fastmcp) - MCP SDK for Python
 - [Model Context Protocol](https://modelcontextprotocol.io/) - AI tool protocol
+- [curl_cffi](https://github.com/lexiforest/curl_cffi) - TLS fingerprint spoofing for anti-detection
+- [Playwright](https://playwright.dev/) - Browser automation fallback
 
 ---
 
