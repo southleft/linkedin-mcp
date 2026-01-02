@@ -721,13 +721,21 @@ async def create_image_post(text: str, image_path: str, alt_text: str | None = N
 
     Args:
         text: Post text content (max 3000 characters)
-        image_path: Absolute path to image file (JPG, PNG, GIF)
+        image_path: Image source - can be:
+            - Absolute path to local file (JPG, PNG, GIF)
+            - URL to image (http:// or https://)
+            - Base64-encoded image (data:image/png;base64,...)
         alt_text: Accessibility text describing the image (recommended)
         visibility: Post visibility - PUBLIC or CONNECTIONS
 
     Returns the created post details including post URN and image URN.
     """
+    import base64
+    import tempfile
     from pathlib import Path
+    from urllib.parse import urlparse
+
+    import httpx
 
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
@@ -736,25 +744,92 @@ async def create_image_post(text: str, image_path: str, alt_text: str | None = N
     logger = get_logger(__name__)
     ctx = get_context()
 
-    # Validate image path
-    image_file = Path(image_path)
-    if not image_file.exists():
-        return {"error": f"Image file not found: {image_path}"}
-
     valid_extensions = (".jpg", ".jpeg", ".png", ".gif")
-    if not image_file.suffix.lower() in valid_extensions:
-        return {"error": f"Invalid image format. Supported: {', '.join(valid_extensions)}"}
-
-    # Check official API availability
-    if not ctx.has_official_client:
-        return {
-            "error": "Official API required for image posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
-            "hint": "Enable 'Share on LinkedIn' product in your LinkedIn Developer app.",
-        }
-
-    visibility_enum = PostVisibility.PUBLIC if visibility.upper() == "PUBLIC" else PostVisibility.CONNECTIONS
+    temp_file = None
+    image_file = None
 
     try:
+        # Detect input type and resolve to a file path
+        if image_path.startswith(("http://", "https://")):
+            # URL input - download to temp file
+            logger.info("Downloading image from URL", url=image_path[:100])
+            try:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                    response = await client.get(image_path)
+                    response.raise_for_status()
+
+                    # Determine file extension from content-type or URL
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "jpeg" in content_type or "jpg" in content_type:
+                        ext = ".jpg"
+                    elif "png" in content_type:
+                        ext = ".png"
+                    elif "gif" in content_type:
+                        ext = ".gif"
+                    else:
+                        # Try to get from URL path
+                        parsed = urlparse(image_path)
+                        path_ext = Path(parsed.path).suffix.lower()
+                        ext = path_ext if path_ext in valid_extensions else ".jpg"
+
+                    # Create temp file with proper extension
+                    temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                    temp_file.write(response.content)
+                    temp_file.close()
+                    image_file = Path(temp_file.name)
+                    logger.info("Downloaded image to temp file", path=str(image_file), size=len(response.content))
+
+            except httpx.HTTPStatusError as e:
+                return {"error": f"Failed to download image: HTTP {e.response.status_code}"}
+            except httpx.RequestError as e:
+                return {"error": f"Failed to download image: {str(e)}"}
+
+        elif image_path.startswith("data:image/"):
+            # Base64-encoded image
+            logger.info("Decoding base64 image")
+            try:
+                # Parse data URL: data:image/png;base64,<data>
+                header, encoded = image_path.split(",", 1)
+                # Extract format from header (e.g., "data:image/png;base64")
+                mime_part = header.split(";")[0]  # "data:image/png"
+                image_format = mime_part.split("/")[1] if "/" in mime_part else "png"
+
+                ext_map = {"jpeg": ".jpg", "jpg": ".jpg", "png": ".png", "gif": ".gif"}
+                ext = ext_map.get(image_format.lower(), ".png")
+
+                # Decode and write to temp file
+                image_data = base64.b64decode(encoded)
+                temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                temp_file.write(image_data)
+                temp_file.close()
+                image_file = Path(temp_file.name)
+                logger.info("Decoded base64 image to temp file", path=str(image_file), size=len(image_data))
+
+            except (ValueError, base64.binascii.Error) as e:
+                return {"error": f"Invalid base64 image data: {str(e)}"}
+
+        else:
+            # Local file path
+            image_file = Path(image_path)
+            if not image_file.exists():
+                return {
+                    "error": f"Image file not found: {image_path}",
+                    "hint": "You can also provide a URL (http/https) or base64-encoded image (data:image/...)",
+                }
+
+        # Validate file extension
+        if not image_file.suffix.lower() in valid_extensions:
+            return {"error": f"Invalid image format. Supported: {', '.join(valid_extensions)}"}
+
+        # Check official API availability
+        if not ctx.has_official_client:
+            return {
+                "error": "Official API required for image posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
+                "hint": "Enable 'Share on LinkedIn' product in your LinkedIn Developer app.",
+            }
+
+        visibility_enum = PostVisibility.PUBLIC if visibility.upper() == "PUBLIC" else PostVisibility.CONNECTIONS
+
         posts_client = LinkedInPostsClient(
             access_token=ctx.official_client._access_token,
         )
@@ -774,6 +849,16 @@ async def create_image_post(text: str, image_path: str, alt_text: str | None = N
     except Exception as e:
         logger.error("Failed to create image post", error=str(e))
         return {"error": str(e)}
+
+    finally:
+        # Clean up temp file if we created one
+        if temp_file is not None:
+            import os
+            try:
+                os.unlink(temp_file.name)
+                logger.debug("Cleaned up temp image file", path=temp_file.name)
+            except OSError:
+                pass  # Ignore cleanup errors
 
 
 @mcp.tool()
