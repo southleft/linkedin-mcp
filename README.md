@@ -89,7 +89,7 @@ playwright install chromium
 
 ### Configuration
 
-Create a `.env` file:
+Create a `.env` file in the project root:
 
 ```bash
 # LinkedIn OAuth (Required for posting)
@@ -97,10 +97,13 @@ LINKEDIN_CLIENT_ID=your_client_id
 LINKEDIN_CLIENT_SECRET=your_client_secret
 LINKEDIN_API_ENABLED=true
 
-# Fresh Data API (Recommended - reliable profile data)
+# Fresh Data API (REQUIRED for reliable profile lookups)
+# Without this, profile lookups will fail due to LinkedIn's bot detection
 # Subscribe at: https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2
 THIRDPARTY_RAPIDAPI_KEY=your_rapidapi_key
 ```
+
+> **Important**: The Fresh Data API key is essential for profile lookups. LinkedIn aggressively blocks bot detection, making the unofficial API unreliable. The Fresh Data API provides consistent, reliable access to profile data.
 
 ### Authentication
 
@@ -115,20 +118,62 @@ linkedin-mcp-auth extract-cookies --browser chrome
 linkedin-mcp-auth status
 ```
 
-### Connect to Claude
+### Connect to Claude Desktop
 
-**Claude Code** - Add to `~/.claude.json`:
+Add the following to your Claude Desktop config file:
+
+| Platform | Config Location |
+|----------|-----------------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+**Complete configuration example:**
+
+```json
+{
+  "mcpServers": {
+    "linkedin": {
+      "command": "/path/to/linkedin-mcp/.venv/bin/python",
+      "args": ["-m", "linkedin_mcp.main"],
+      "cwd": "/path/to/linkedin-mcp",
+      "env": {
+        "LINKEDIN_CLIENT_ID": "your_client_id",
+        "LINKEDIN_CLIENT_SECRET": "your_client_secret",
+        "LINKEDIN_API_ENABLED": "true",
+        "THIRDPARTY_RAPIDAPI_KEY": "your_rapidapi_key",
+        "PYTHONPATH": "/path/to/linkedin-mcp/src",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
+```
+
+> **Critical**: You must include `THIRDPARTY_RAPIDAPI_KEY` in the `env` section. Claude Desktop does not read `.env` files—all environment variables must be explicitly passed in the config.
+
+**After updating the config:**
+1. Quit Claude Desktop completely
+2. Reopen Claude Desktop
+3. The LinkedIn MCP server will connect automatically
+
+### Connect to Claude Code
+
+Add to `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "linkedin-mcp": {
       "type": "stdio",
-      "command": "/path/to/python3",
-      "args": ["-m", "linkedin_mcp"],
+      "command": "/path/to/linkedin-mcp/.venv/bin/python",
+      "args": ["-m", "linkedin_mcp.main"],
       "cwd": "/path/to/linkedin-mcp",
       "env": {
+        "LINKEDIN_CLIENT_ID": "your_client_id",
+        "LINKEDIN_CLIENT_SECRET": "your_client_secret",
         "LINKEDIN_API_ENABLED": "true",
+        "THIRDPARTY_RAPIDAPI_KEY": "your_rapidapi_key",
         "PYTHONPATH": "/path/to/linkedin-mcp/src"
       }
     }
@@ -137,14 +182,6 @@ linkedin-mcp-auth status
 ```
 
 Run `/mcp` in Claude Code to connect.
-
-**Claude Desktop** - Add to config:
-
-| Platform | Location |
-|----------|----------|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
 
 ---
 
@@ -341,6 +378,20 @@ Content Request → Official LinkedIn API (OAuth 2.0)
 
 ## Troubleshooting
 
+**"Profile lookup returns bot detection error"**
+This is the most common issue. LinkedIn blocks unofficial API access.
+
+**Solution**: Add `THIRDPARTY_RAPIDAPI_KEY` to your Claude Desktop config:
+```json
+"env": {
+  "THIRDPARTY_RAPIDAPI_KEY": "your_rapidapi_key",
+  ...
+}
+```
+Get your API key at: https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2
+
+> **Important**: Claude Desktop does not read `.env` files. You must add the key directly to the config's `env` section.
+
 **"LinkedIn client not initialized"**
 ```bash
 linkedin-mcp-auth status    # Check configuration
@@ -348,7 +399,9 @@ linkedin-mcp-auth oauth     # Re-authenticate
 ```
 
 **"Application context not initialized"**
-Reconnect the MCP server with `/mcp` in Claude Code.
+Reconnect the MCP server:
+- Claude Desktop: Quit and reopen the app
+- Claude Code: Run `/mcp` to reconnect
 
 **"Session redirect loop"**
 ```bash
@@ -359,9 +412,10 @@ linkedin-mcp-auth extract-cookies --browser chrome
 - Verify OAuth: `linkedin-mcp-auth status`
 - Ensure "Share on LinkedIn" product is enabled in Developer Portal
 
-**Profile data incomplete**
-- Subscribe to Fresh Data API for comprehensive profile data
-- Get API key at: https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2
+**Profile data incomplete or missing**
+1. Ensure `THIRDPARTY_RAPIDAPI_KEY` is set in your Claude config
+2. Restart Claude Desktop after config changes
+3. The Fresh Data API is the primary source for profile data
 
 ---
 
