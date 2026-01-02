@@ -259,12 +259,18 @@ class FreshLinkedInDataClient:
                     return results
             elif response.status_code == 403:
                 error_msg = response.json().get("message", "Access denied")
-                logger.error(
-                    "Fresh Data API subscription required",
+                logger.warning(
+                    "Fresh Data API search requires Pro plan or higher",
                     status=response.status_code,
                     error=error_msg,
+                    endpoint="/search-leads",
+                    suggestion="Basic plan ($10/mo) doesn't include Search Lead/Company. Upgrade to Pro ($45/mo) for search capabilities.",
                 )
-                raise PermissionError(f"Fresh Data API: {error_msg}. Subscribe at: https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2")
+                raise PermissionError(
+                    f"Fresh Data API search requires Pro plan or higher. "
+                    f"Basic plan doesn't include Search Lead/Company. "
+                    f"Will fall back to linkedin-api if available. Error: {error_msg}"
+                )
             elif response.status_code == 429:
                 error_msg = response.json().get("message", "Rate limited")
                 logger.warning(
@@ -277,12 +283,14 @@ class FreshLinkedInDataClient:
                 # API endpoint doesn't exist - provider may have changed or deprecated
                 error_data = response.json() if response.text else {}
                 error_msg = error_data.get("message", "Endpoint not found")
-                logger.error(
-                    "Fresh Data API search endpoint not found (API may be deprecated)",
+                logger.warning(
+                    "Fresh Data API search endpoint not available",
                     status=response.status_code,
                     error=error_msg,
+                    endpoint="/search-leads",
+                    suggestion="This endpoint may require a higher subscription tier or may have been deprecated.",
                 )
-                raise RuntimeError(f"Fresh Data API endpoint not found: {error_msg}. The API provider may have changed or deprecated this endpoint.")
+                raise RuntimeError(f"Fresh Data API search endpoint not available: {error_msg}")
             else:
                 logger.error(
                     "Profile search failed",
@@ -1040,20 +1048,24 @@ class FreshLinkedInDataClient:
             "client_type": "fresh_data_api",
             "api_host": self.API_HOST,
             "has_api_key": bool(self._api_key),
-            "available_features": [
-                # Profile & Company
-                "get_profile",
-                "search_profiles",
-                "get_company",
-                "search_companies",
-                "get_company_employees",
-                # Posts & Engagement
-                "get_profile_posts",
-                "get_company_posts",
-                "get_post_comments",
-                "get_post_reactions",
-                "search_posts",
-            ],
+            "features_by_plan": {
+                "basic": [
+                    "get_profile",
+                    "get_company",
+                    "get_profile_posts",
+                    "get_company_posts",
+                    "get_post_comments",
+                    "get_post_reactions",
+                    "job_search",
+                ],
+                "pro_and_above": [
+                    "search_profiles (search-leads)",
+                    "search_companies",
+                    "get_company_employees",
+                    "search_posts",
+                ],
+            },
+            "note": "Search Lead/Company requires Pro plan ($45/mo) or higher. Basic plan supports profile/company lookup and posts.",
             "documentation": "https://fdocs.info/api-reference/quickstart",
             "subscription": "https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2",
         }

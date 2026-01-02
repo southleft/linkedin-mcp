@@ -1453,6 +1453,10 @@ async def search_people(
     Note: Location/region filters are not supported by the underlying API.
 
     Returns list of matching profiles with name, title, location, and profile URL.
+
+    Search priority:
+    1. Fresh Data API (requires Pro plan $45/mo for search-leads endpoint)
+    2. linkedin-api (cookie-based, may be blocked by LinkedIn bot detection)
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
@@ -1461,10 +1465,21 @@ async def search_people(
     ctx = get_context()
 
     limit = min(limit, 50)  # Cap at 50
+    sources_tried = []
+    errors_encountered = []
 
-    # Try data provider first (has comprehensive fallback chain)
+    logger.info(
+        "Starting people search",
+        keywords=keywords,
+        keyword_title=keyword_title,
+        keyword_company=keyword_company,
+        limit=limit,
+    )
+
+    # Try data provider first (has comprehensive fallback chain including Fresh Data API)
     if ctx.data_provider:
         try:
+            logger.debug("Trying data_provider.search_profiles (Fresh Data API → linkedin-api fallback)")
             title_keywords = [keyword_title] if keyword_title else None
             company_names = [keyword_company] if keyword_company else None
 
@@ -1474,31 +1489,73 @@ async def search_people(
                 company_names=company_names,
                 limit=limit,
             )
+            source = result.get("source", "unknown")
+            data = result.get("data", [])
+            logger.info("Search completed via data_provider", source=source, count=len(data))
             return {
                 "success": True,
-                "results": result.get("data", []),
-                "count": len(result.get("data", [])),
-                "source": result.get("source", "unknown"),
+                "results": data,
+                "count": len(data),
+                "source": source,
             }
+        except PermissionError as e:
+            # Fresh Data API subscription limitation (Basic plan doesn't have search)
+            sources_tried.append("fresh_data_api")
+            errors_encountered.append(f"Fresh Data API: {str(e)}")
+            logger.info("Fresh Data API search not available on current plan, trying linkedin_client")
         except Exception as e:
+            sources_tried.append("data_provider")
+            errors_encountered.append(f"Data provider: {str(e)}")
             logger.warning("Data provider search failed, trying linkedin_client", error=str(e))
+    else:
+        logger.debug("data_provider not available")
 
     # Fall back to linkedin_client if data provider fails
     if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
+        logger.warning(
+            "No search sources available",
+            sources_tried=sources_tried,
+            errors=errors_encountered,
+        )
+        return {
+            "error": "LinkedIn search not available. Fresh Data API search requires Pro plan ($45/mo), and linkedin-api is not configured.",
+            "sources_tried": sources_tried,
+            "suggestion": "Configure linkedin-api with session cookies, or upgrade Fresh Data API to Pro plan for search capabilities.",
+        }
 
     try:
+        logger.debug("Trying linkedin_client.search_people (cookie-based)")
         results = await ctx.linkedin_client.search_people(
             keywords=keywords,
             limit=limit,
             keyword_title=keyword_title,
             keyword_company=keyword_company,
         )
-        return {"success": True, "results": results, "count": len(results), "source": "linkedin_api"}
+        logger.info("Search completed via linkedin_client", count=len(results))
+        return {
+            "success": True,
+            "results": results,
+            "count": len(results),
+            "source": "linkedin_api",
+            "note": "Using cookie-based linkedin-api. Results may be limited if LinkedIn detects bot activity.",
+        }
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
-        logger.error("Failed to search", error=str(e))
-        return format_error_response(e)
+        sources_tried.append("linkedin_api")
+        errors_encountered.append(f"linkedin-api: {str(e)}")
+        logger.error(
+            "All search sources failed",
+            error=str(e),
+            sources_tried=sources_tried,
+        )
+        error_response = format_error_response(e)
+        error_response["sources_tried"] = sources_tried
+        error_response["diagnostic_info"] = {
+            "fresh_data_api": "Requires Pro plan ($45/mo) for Search Lead/Company",
+            "linkedin_api": "Cookie-based, subject to LinkedIn bot detection",
+            "errors": errors_encountered,
+        }
+        return error_response
 
 
 @mcp.tool()
@@ -1511,6 +1568,10 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
         limit: Maximum results to return (default: 10, max: 50)
 
     Returns list of matching companies.
+
+    Search priority:
+    1. Fresh Data API (requires Pro plan $45/mo for search-companies endpoint)
+    2. linkedin-api (cookie-based, may be blocked by LinkedIn bot detection)
     """
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
@@ -1519,31 +1580,77 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
     ctx = get_context()
 
     limit = min(limit, 50)  # Cap at 50
+    sources_tried = []
+    errors_encountered = []
+
+    logger.info("Starting company search", keywords=keywords, limit=limit)
 
     # Try data provider first (has comprehensive fallback chain)
     if ctx.data_provider:
         try:
+            logger.debug("Trying data_provider.search_companies (Fresh Data API → linkedin-api fallback)")
             result = await ctx.data_provider.search_companies(query=keywords, limit=limit)
+            source = result.get("source", "unknown")
+            data = result.get("data", [])
+            logger.info("Company search completed via data_provider", source=source, count=len(data))
             return {
                 "success": True,
-                "results": result.get("data", []),
-                "count": len(result.get("data", [])),
-                "source": result.get("source", "unknown"),
+                "results": data,
+                "count": len(data),
+                "source": source,
             }
+        except PermissionError as e:
+            sources_tried.append("fresh_data_api")
+            errors_encountered.append(f"Fresh Data API: {str(e)}")
+            logger.info("Fresh Data API company search not available on current plan, trying linkedin_client")
         except Exception as e:
-            logger.warning("Data provider search failed, trying linkedin_client", error=str(e))
+            sources_tried.append("data_provider")
+            errors_encountered.append(f"Data provider: {str(e)}")
+            logger.warning("Data provider company search failed, trying linkedin_client", error=str(e))
+    else:
+        logger.debug("data_provider not available")
 
     # Fall back to linkedin_client if data provider fails
     if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
+        logger.warning(
+            "No company search sources available",
+            sources_tried=sources_tried,
+            errors=errors_encountered,
+        )
+        return {
+            "error": "LinkedIn company search not available. Fresh Data API search requires Pro plan ($45/mo), and linkedin-api is not configured.",
+            "sources_tried": sources_tried,
+            "suggestion": "Configure linkedin-api with session cookies, or upgrade Fresh Data API to Pro plan for search capabilities.",
+        }
 
     try:
+        logger.debug("Trying linkedin_client.search_companies (cookie-based)")
         results = await ctx.linkedin_client.search_companies(keywords=keywords, limit=limit)
-        return {"success": True, "results": results, "count": len(results), "source": "linkedin_api"}
+        logger.info("Company search completed via linkedin_client", count=len(results))
+        return {
+            "success": True,
+            "results": results,
+            "count": len(results),
+            "source": "linkedin_api",
+            "note": "Using cookie-based linkedin-api. Results may be limited if LinkedIn detects bot activity.",
+        }
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
-        logger.error("Failed to search companies", error=str(e))
-        return format_error_response(e)
+        sources_tried.append("linkedin_api")
+        errors_encountered.append(f"linkedin-api: {str(e)}")
+        logger.error(
+            "All company search sources failed",
+            error=str(e),
+            sources_tried=sources_tried,
+        )
+        error_response = format_error_response(e)
+        error_response["sources_tried"] = sources_tried
+        error_response["diagnostic_info"] = {
+            "fresh_data_api": "Requires Pro plan ($45/mo) for Search Lead/Company",
+            "linkedin_api": "Cookie-based, subject to LinkedIn bot detection",
+            "errors": errors_encountered,
+        }
+        return error_response
 
 
 # =============================================================================
