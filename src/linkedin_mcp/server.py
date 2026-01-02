@@ -65,18 +65,27 @@ async def debug_context() -> dict:
                 "is_initialized": ctx.is_initialized,
                 "has_official_client": ctx.has_official_client,
                 "has_linkedin_client": ctx.has_linkedin_client,
+                "has_marketing_client": ctx.has_marketing_client,
+                "has_fresh_data_client": ctx.has_fresh_data_client,
+                "has_data_provider": ctx.has_data_provider,
                 "has_database": ctx.has_database,
                 "has_scheduler": ctx.has_scheduler,
                 "has_browser": ctx.has_browser,
                 "linkedin_client_type": type(ctx.linkedin_client).__name__ if ctx.linkedin_client else None,
             },
             "official_api": official_status,
+            "data_provider": {
+                "initialized": ctx.has_data_provider,
+                "marketing_client": ctx.has_marketing_client,
+                "fresh_data_client": ctx.has_fresh_data_client,
+            },
             "settings": {
                 "api_enabled": settings.linkedin.api_enabled,
                 "email": settings.linkedin.email,
                 "password_set": settings.linkedin.password is not None,
                 "session_cookie_path": str(settings.session_cookie_path),
                 "session_cookie_path_absolute": str(settings.session_cookie_path.absolute()),
+                "rapidapi_key_set": settings.third_party.rapidapi_key is not None,
             },
             "cookie_file": {
                 "exists": cookie_exists,
@@ -86,6 +95,7 @@ async def debug_context() -> dict:
                 "LINKEDIN_API_ENABLED": os.environ.get("LINKEDIN_API_ENABLED"),
                 "LINKEDIN_EMAIL": os.environ.get("LINKEDIN_EMAIL"),
                 "LINKEDIN_PASSWORD": "***" if os.environ.get("LINKEDIN_PASSWORD") else None,
+                "THIRDPARTY_RAPIDAPI_KEY": "***" if os.environ.get("THIRDPARTY_RAPIDAPI_KEY") else None,
                 "CWD": os.getcwd(),
             },
         }
@@ -213,7 +223,12 @@ async def get_profile(
 
         # Use Profile Enrichment Engine for comprehensive data
         # Pass browser automation for DOM scraping (most reliable source)
-        engine = ProfileEnrichmentEngine(ctx.linkedin_client, browser)
+        # Pass fresh_data_client for RapidAPI (most reliable paid source)
+        engine = ProfileEnrichmentEngine(
+            ctx.linkedin_client,
+            browser,
+            fresh_data_client=ctx.fresh_data_client,
+        )
         enriched_profile = await engine.get_enriched_profile(
             public_id=profile_id,
             include_activity=include_activity,
@@ -1802,10 +1817,32 @@ async def search_people(
     logger = get_logger(__name__)
     ctx = get_context()
 
+    limit = min(limit, 50)  # Cap at 50
+
+    # Try data provider first (has comprehensive fallback chain)
+    if ctx.data_provider:
+        try:
+            title_keywords = [keyword_title] if keyword_title else None
+            company_names = [keyword_company] if keyword_company else None
+
+            result = await ctx.data_provider.search_profiles(
+                query=keywords,
+                title_keywords=title_keywords,
+                company_names=company_names,
+                limit=limit,
+            )
+            return {
+                "success": True,
+                "results": result.get("data", []),
+                "count": len(result.get("data", [])),
+                "source": result.get("source", "unknown"),
+            }
+        except Exception as e:
+            logger.warning("Data provider search failed, trying linkedin_client", error=str(e))
+
+    # Fall back to linkedin_client if data provider fails
     if not ctx.linkedin_client:
         return {"error": "LinkedIn client not initialized"}
-
-    limit = min(limit, 50)  # Cap at 50
 
     try:
         results = await ctx.linkedin_client.search_people(
@@ -1814,7 +1851,7 @@ async def search_people(
             keyword_title=keyword_title,
             keyword_company=keyword_company,
         )
-        return {"success": True, "results": results, "count": len(results)}
+        return {"success": True, "results": results, "count": len(results), "source": "linkedin_api"}
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to search", error=str(e))
@@ -1838,14 +1875,28 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
+    limit = min(limit, 50)  # Cap at 50
+
+    # Try data provider first (has comprehensive fallback chain)
+    if ctx.data_provider:
+        try:
+            result = await ctx.data_provider.search_companies(query=keywords, limit=limit)
+            return {
+                "success": True,
+                "results": result.get("data", []),
+                "count": len(result.get("data", [])),
+                "source": result.get("source", "unknown"),
+            }
+        except Exception as e:
+            logger.warning("Data provider search failed, trying linkedin_client", error=str(e))
+
+    # Fall back to linkedin_client if data provider fails
     if not ctx.linkedin_client:
         return {"error": "LinkedIn client not initialized"}
 
-    limit = min(limit, 50)  # Cap at 50
-
     try:
         results = await ctx.linkedin_client.search_companies(keywords=keywords, limit=limit)
-        return {"success": True, "results": results, "count": len(results)}
+        return {"success": True, "results": results, "count": len(results), "source": "linkedin_api"}
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to search companies", error=str(e))
@@ -1903,12 +1954,22 @@ async def get_company(public_id: str) -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
+    # Try data provider first (uses marketing API with fallback chain)
+    if ctx.has_data_provider:
+        try:
+            company = await ctx.data_provider.get_organization(vanity_name=public_id)
+            if company:
+                return {"success": True, "company": company, "source": "data_provider"}
+        except Exception as e:
+            logger.debug("Data provider failed for company lookup, trying fallback", error=str(e))
+
+    # Fall back to unofficial client
     if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
+        return {"error": "No LinkedIn client available for company lookup"}
 
     try:
         company = await ctx.linkedin_client.get_company(public_id)
-        return {"success": True, "company": company}
+        return {"success": True, "company": company, "source": "linkedin_client"}
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
         logger.error("Failed to fetch company", error=str(e), public_id=public_id)
@@ -1943,6 +2004,52 @@ async def get_company_updates(public_id: str, limit: int = 10) -> dict:
     except Exception as e:
         logger.error("Failed to fetch company updates", error=str(e), public_id=public_id)
         return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_organization_followers(organization_id: str) -> dict:
+    """
+    Get follower count for an organization using the Community Management API.
+
+    This tool uses the official LinkedIn Community Management API which provides
+    accurate follower counts for organizations you have admin access to.
+
+    Args:
+        organization_id: LinkedIn organization URN ID (numeric, e.g., '12345678')
+
+    Returns follower count and organization details.
+
+    Note: Requires Community Management API access and admin permissions for the organization.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    # This requires the marketing client (Community Management API)
+    if ctx.has_data_provider:
+        try:
+            result = await ctx.data_provider.get_organization_follower_count(organization_id)
+            if result:
+                return {
+                    "success": True,
+                    "organization_id": organization_id,
+                    "follower_count": result.get("firstDegreeSize", 0),
+                    "raw_data": result,
+                    "source": "community_management_api",
+                }
+        except Exception as e:
+            logger.warning(
+                "Community Management API failed for follower count",
+                error=str(e),
+                organization_id=organization_id,
+            )
+
+    return {
+        "error": "Community Management API not available or organization not accessible",
+        "hint": "Ensure you have admin access to this organization and the Marketing API is configured.",
+    }
 
 
 # =============================================================================

@@ -31,6 +31,7 @@ class ProfileEnrichmentEngine:
     an enrichment system that always provides the most complete data possible.
 
     Data Sources:
+    - Fresh Data API (RapidAPI) - Most reliable paid source
     - Primary profile endpoint (API)
     - Contact information (API)
     - Skills and endorsements (API)
@@ -42,9 +43,15 @@ class ProfileEnrichmentEngine:
     - Web search (Public data) - Always available, no auth required
     """
 
-    def __init__(self, linkedin_client: Any, browser_automation: Any = None) -> None:
+    def __init__(
+        self,
+        linkedin_client: Any,
+        browser_automation: Any = None,
+        fresh_data_client: Any = None,
+    ) -> None:
         self._client = linkedin_client
         self._browser = browser_automation
+        self._fresh_data = fresh_data_client
 
     async def get_enriched_profile(
         self,
@@ -81,6 +88,10 @@ class ProfileEnrichmentEngine:
             # Web search is ALWAYS available - no auth required
             "web_search": self._fetch_from_web_search(public_id),
         }
+
+        # Fresh Data API (RapidAPI) - Most reliable paid source
+        if self._fresh_data:
+            tasks["fresh_data"] = self._fetch_from_fresh_data(public_id)
 
         if include_network:
             tasks["network"] = self._fetch_network_info(public_id)
@@ -138,6 +149,16 @@ class ProfileEnrichmentEngine:
             return await self._client.get_profile(public_id)
         except Exception as e:
             logger.debug("Primary profile fetch failed", error=str(e))
+            return None
+
+    async def _fetch_from_fresh_data(self, public_id: str) -> dict[str, Any] | None:
+        """Fetch profile data from Fresh Data API (RapidAPI)."""
+        if not self._fresh_data:
+            return None
+        try:
+            return await self._fresh_data.get_profile(public_id=public_id)
+        except Exception as e:
+            logger.debug("Fresh Data API profile fetch failed", error=str(e))
             return None
 
     async def _fetch_contact_info(self, public_id: str) -> dict[str, Any] | None:
@@ -252,6 +273,36 @@ class ProfileEnrichmentEngine:
         primary = sources.get("profile")
         if primary and isinstance(primary, dict):
             profile.update(primary)
+
+        # Fresh Data API is HIGH PRIORITY - comprehensive data from RapidAPI
+        # Maps Fresh Data API field names to our standard names
+        fresh_data = sources.get("fresh_data")
+        if fresh_data and isinstance(fresh_data, dict):
+            # Fresh Data API uses different field names
+            if not profile.get("firstName") and fresh_data.get("first_name"):
+                profile["firstName"] = fresh_data.get("first_name")
+            if not profile.get("lastName") and fresh_data.get("last_name"):
+                profile["lastName"] = fresh_data.get("last_name")
+            if not profile.get("headline") and fresh_data.get("headline"):
+                profile["headline"] = fresh_data.get("headline")
+            if not profile.get("summary") and fresh_data.get("about"):
+                profile["summary"] = fresh_data.get("about")
+            if not profile.get("locationName") and fresh_data.get("city"):
+                profile["locationName"] = fresh_data.get("city")
+            if not profile.get("profilePicture") and fresh_data.get("profile_image_url"):
+                profile["profilePicture"] = fresh_data.get("profile_image_url")
+            if not profile.get("currentCompany") and fresh_data.get("company"):
+                profile["currentCompany"] = fresh_data.get("company")
+            if not profile.get("industry") and fresh_data.get("company_industry"):
+                profile["industry"] = fresh_data.get("company_industry")
+            # Store raw fresh_data for reference if it has rich data
+            if fresh_data.get("experiences") or fresh_data.get("educations"):
+                profile["_fresh_data"] = {
+                    "experiences": fresh_data.get("experiences", []),
+                    "educations": fresh_data.get("educations", []),
+                    "languages": fresh_data.get("languages", []),
+                    "certifications": fresh_data.get("certifications", []),
+                }
 
         # Merge search results for missing basic info
         # Search uses different field names: name, jobtitle, location

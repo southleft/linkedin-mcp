@@ -53,7 +53,7 @@ class LinkedInSettings(BaseSettings):
         description="OAuth callback URL (must match Developer Portal)",
     )
 
-    model_config = SettingsConfigDict(env_prefix="LINKEDIN_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="LINKEDIN_", env_file=".env", extra="ignore")
 
 
 class DatabaseSettings(BaseSettings):
@@ -160,6 +160,34 @@ class FeatureFlags(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FEATURE_")
 
 
+class ThirdPartyAPISettings(BaseSettings):
+    """Third-party API configurations for LinkedIn data enrichment."""
+
+    # RapidAPI - Fresh LinkedIn Profile Data
+    rapidapi_key: SecretStr | None = Field(
+        default=None,
+        description="RapidAPI key for Fresh LinkedIn Profile Data API",
+    )
+    rapidapi_timeout: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        description="Request timeout for RapidAPI calls in seconds",
+    )
+
+    # Optional: Bright Data (for future integration)
+    brightdata_api_key: SecretStr | None = Field(
+        default=None,
+        description="Bright Data API key for LinkedIn scraping",
+    )
+    brightdata_customer_id: str | None = Field(
+        default=None,
+        description="Bright Data customer ID",
+    )
+
+    model_config = SettingsConfigDict(env_prefix="THIRDPARTY_", env_file=".env", extra="ignore")
+
+
 class Settings(BaseSettings):
     """Root settings aggregating all configuration sections."""
 
@@ -171,6 +199,7 @@ class Settings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
+    third_party: ThirdPartyAPISettings = Field(default_factory=ThirdPartyAPISettings)
 
     # Security
     encryption_key: SecretStr | None = Field(default=None)

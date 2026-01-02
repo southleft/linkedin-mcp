@@ -267,6 +267,102 @@ async def init_linkedin_client(settings: Settings) -> Any:
 
 
 
+async def init_marketing_client(settings: Settings, official_client: Any) -> Any:
+    """
+    Initialize the LinkedIn Marketing API client for Community Management.
+
+    Requires:
+    1. Valid OAuth token from official_client
+    2. Community Management API product enabled in Developer Portal
+
+    Args:
+        settings: Application settings
+        official_client: LinkedIn Official API client with valid OAuth token
+
+    Returns:
+        Initialized LinkedInMarketingClient, or None if not available
+    """
+    if not official_client:
+        logger.info(
+            "Marketing API disabled - requires OAuth authentication",
+            recommendation="Run: linkedin-mcp-auth oauth",
+        )
+        return None
+
+    if not official_client.is_authenticated:
+        logger.info("Marketing API disabled - OAuth token expired or invalid")
+        return None
+
+    try:
+        from linkedin_mcp.services.linkedin.marketing_client import LinkedInMarketingClient
+
+        # Get access token from official client
+        access_token = official_client._access_token
+
+        if not access_token:
+            logger.warning("Marketing API disabled - no access token available")
+            return None
+
+        client = LinkedInMarketingClient(
+            access_token=access_token,
+        )
+
+        logger.info(
+            "Marketing API client initialized",
+            features=["organization_lookup", "follower_counts"],
+        )
+        return client
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize Marketing API client",
+            error=str(e),
+        )
+        return None
+
+
+async def init_fresh_data_client(settings: Settings) -> Any:
+    """
+    Initialize the Fresh LinkedIn Data API client (RapidAPI).
+
+    Requires:
+    - THIRDPARTY_RAPIDAPI_KEY environment variable
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        Initialized FreshLinkedInDataClient, or None if not configured
+    """
+    if not settings.third_party.rapidapi_key:
+        logger.info(
+            "Fresh Data API disabled - no API key configured",
+            recommendation="Set THIRDPARTY_RAPIDAPI_KEY in .env",
+        )
+        return None
+
+    try:
+        from linkedin_mcp.services.linkedin.fresh_data_client import FreshLinkedInDataClient
+
+        client = FreshLinkedInDataClient(
+            rapidapi_key=settings.third_party.rapidapi_key.get_secret_value(),
+            timeout=settings.third_party.rapidapi_timeout,
+        )
+
+        logger.info(
+            "Fresh Data API client initialized",
+            features=["profile_search", "company_search", "employee_search"],
+        )
+        return client
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize Fresh Data API client",
+            error=str(e),
+        )
+        return None
+
+
 async def init_database(settings: Settings) -> "AsyncEngine | None":
     """
     Initialize the database engine.
@@ -391,31 +487,38 @@ async def init_browser(settings: Settings) -> tuple["Browser | None", "BrowserCo
 async def init_data_provider(
     settings: Settings,
     primary_client: Any | None = None,
+    marketing_client: Any | None = None,
+    fresh_data_client: Any | None = None,
 ) -> Any:
     """
     Initialize the LinkedIn data provider with automatic fallback.
 
     The data provider orchestrates between multiple data sources:
     1. Primary: tomquirk/linkedin-api (fastest, most features)
-    2. Secondary: Enhanced HTTP client with curl_cffi (anti-detection)
-    3. Tertiary: Headless browser scraper (most reliable, slowest)
+    2. Marketing API: LinkedIn Official Community Management API (organizations)
+    3. Fresh Data API: RapidAPI Fresh LinkedIn Profile Data (search)
+    4. Enhanced: HTTP client with curl_cffi (anti-detection)
+    5. Headless: Browser scraper (most reliable, slowest)
 
     Args:
         settings: Application settings
         primary_client: Optional pre-initialized linkedin-api client
+        marketing_client: Optional Marketing API client (Community Management)
+        fresh_data_client: Optional Fresh LinkedIn Data API client (RapidAPI)
 
     Returns:
-        Initialized LinkedInDataProvider, or None if no cookies available
+        Initialized LinkedInDataProvider, or None if no data sources available
     """
     from linkedin_mcp.services.storage.token_storage import get_unofficial_cookies
 
     # Get cookies for fallback clients
     cookies = get_unofficial_cookies()
 
-    if not cookies and not primary_client:
+    # Allow initialization if any data source is available
+    if not cookies and not primary_client and not marketing_client and not fresh_data_client:
         logger.info(
-            "Data provider disabled - no cookies or primary client available",
-            recommendation="Run: linkedin-mcp-auth extract-cookies",
+            "Data provider disabled - no data sources available",
+            recommendation="Run: linkedin-mcp-auth oauth (for Marketing API) or set THIRDPARTY_RAPIDAPI_KEY",
         )
         return None
 
@@ -434,11 +537,13 @@ async def init_data_provider(
         if primary_client and hasattr(primary_client, "_client"):
             underlying_client = primary_client._client
 
-        # Create data provider with fallback chain
+        # Create data provider with full fallback chain
         provider = LinkedInDataProvider(
             primary_client=underlying_client,
+            marketing_client=marketing_client,
+            fresh_data_client=fresh_data_client,
             cookies=cookie_dict,
-            enable_enhanced=settings.features.browser_fallback,  # Use same setting
+            enable_enhanced=settings.features.browser_fallback,
             enable_headless=settings.features.browser_fallback,
         )
 
@@ -447,6 +552,8 @@ async def init_data_provider(
         logger.info(
             "Data provider initialized with fallback chain",
             primary=underlying_client is not None,
+            marketing=marketing_client is not None,
+            fresh_data=fresh_data_client is not None,
             cookies_available=bool(cookie_dict),
             enhanced_enabled=settings.features.browser_fallback,
             headless_enabled=settings.features.browser_fallback,
@@ -510,6 +617,22 @@ async def shutdown_services(ctx: AppContext) -> None:
         except Exception as e:
             logger.warning("Error closing LinkedIn client", error=str(e))
 
+    # Close Marketing API client
+    if ctx.marketing_client:
+        logger.debug("Closing Marketing API client")
+        try:
+            await ctx.marketing_client.close()
+        except Exception as e:
+            logger.warning("Error closing Marketing API client", error=str(e))
+
+    # Close Fresh Data API client
+    if ctx.fresh_data_client:
+        logger.debug("Closing Fresh Data API client")
+        try:
+            await ctx.fresh_data_client.close()
+        except Exception as e:
+            logger.warning("Error closing Fresh Data API client", error=str(e))
+
     # Close data provider (includes enhanced client and headless scraper)
     if ctx.data_provider:
         logger.debug("Closing data provider")
@@ -548,8 +671,10 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
 
     try:
         # Initialize services concurrently where possible
+        # Note: Marketing client depends on official client, so initialized separately
         official_task = asyncio.create_task(init_official_client(settings))
         linkedin_task = asyncio.create_task(init_linkedin_client(settings))
+        fresh_data_task = asyncio.create_task(init_fresh_data_client(settings))
         db_task = asyncio.create_task(init_database(settings))
         scheduler_task = asyncio.create_task(init_scheduler(settings))
         browser_task = asyncio.create_task(init_browser(settings))
@@ -558,6 +683,7 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         results = await asyncio.gather(
             official_task,
             linkedin_task,
+            fresh_data_task,
             db_task,
             scheduler_task,
             browser_task,
@@ -565,7 +691,14 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         )
 
         # Process results
-        official_result, linkedin_result, db_result, scheduler_result, browser_result = results
+        (
+            official_result,
+            linkedin_result,
+            fresh_data_result,
+            db_result,
+            scheduler_result,
+            browser_result,
+        ) = results
 
         # Handle Official LinkedIn client (preferred for basic profile)
         if isinstance(official_result, Exception):
@@ -584,6 +717,17 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             )
         else:
             ctx.linkedin_client = linkedin_result
+
+        # Handle Fresh Data API client (RapidAPI)
+        fresh_data_client = None
+        if isinstance(fresh_data_result, Exception):
+            logger.warning(
+                "Fresh Data API initialization failed",
+                error=str(fresh_data_result),
+            )
+        else:
+            fresh_data_client = fresh_data_result
+            ctx.fresh_data_client = fresh_data_result
 
         # Handle database (optional but recommended)
         if isinstance(db_result, Exception):
@@ -613,12 +757,23 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             set_browser_automation(automation)
             logger.info("Browser automation initialized for profile scraping")
 
-        # Initialize data provider with fallback chain (after linkedin client is ready)
-        # This provides automatic fallback: primary → enhanced (curl_cffi) → headless
+        # Initialize Marketing API client (depends on official client for OAuth token)
+        marketing_client = None
+        if ctx.official_client:
+            try:
+                marketing_client = await init_marketing_client(settings, ctx.official_client)
+                ctx.marketing_client = marketing_client
+            except Exception as e:
+                logger.warning("Marketing API initialization failed", error=str(e))
+
+        # Initialize data provider with fallback chain (after all clients are ready)
+        # This provides automatic fallback: primary → marketing → fresh_data → enhanced → headless
         try:
             data_provider_result = await init_data_provider(
                 settings=settings,
                 primary_client=ctx.linkedin_client,
+                marketing_client=marketing_client,
+                fresh_data_client=fresh_data_client,
             )
             ctx.data_provider = data_provider_result
         except Exception as e:
@@ -635,6 +790,8 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         logger.info(
             "Server initialized successfully",
             official_api=ctx.has_official_client,
+            marketing_api=ctx.has_marketing_client,
+            fresh_data_api=ctx.has_fresh_data_client,
             unofficial_api=ctx.has_linkedin_client,
             data_provider=ctx.has_data_provider,
             database=ctx.has_database,

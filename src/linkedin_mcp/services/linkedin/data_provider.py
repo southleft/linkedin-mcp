@@ -5,14 +5,16 @@ Orchestrates between multiple data sources to provide reliable
 LinkedIn data access:
 
 1. Primary: tomquirk/linkedin-api (fastest, most features)
-2. Secondary: Enhanced HTTP client with curl_cffi (anti-detection)
-3. Tertiary: Headless browser scraper (most reliable, slowest)
+2. Marketing API: LinkedIn Official Marketing/Community Management API (organizations)
+3. Fresh Data API: RapidAPI Fresh LinkedIn Profile Data (profile/company search)
+4. Enhanced: HTTP client with curl_cffi (anti-detection)
+5. Headless: Browser scraper (most reliable, slowest)
 
 All operations happen in the background without any visible UI.
 """
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from linkedin_mcp.core.exceptions import (
     LinkedInAPIError,
@@ -20,6 +22,10 @@ from linkedin_mcp.core.exceptions import (
     format_error_response,
 )
 from linkedin_mcp.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from linkedin_mcp.services.linkedin.fresh_data_client import FreshLinkedInDataClient
+    from linkedin_mcp.services.linkedin.marketing_client import LinkedInMarketingClient
 
 logger = get_logger(__name__)
 
@@ -47,6 +53,8 @@ class LinkedInDataProvider:
     def __init__(
         self,
         primary_client: Any | None = None,
+        marketing_client: "LinkedInMarketingClient | None" = None,
+        fresh_data_client: "FreshLinkedInDataClient | None" = None,
         cookies: dict[str, str] | None = None,
         enable_enhanced: bool = True,
         enable_headless: bool = True,
@@ -56,11 +64,15 @@ class LinkedInDataProvider:
 
         Args:
             primary_client: tomquirk/linkedin-api client instance
+            marketing_client: LinkedIn Marketing API client (Community Management)
+            fresh_data_client: Fresh LinkedIn Data API client (RapidAPI)
             cookies: LinkedIn cookies for fallback clients
             enable_enhanced: Enable enhanced HTTP client with curl_cffi
             enable_headless: Enable headless browser scraper
         """
         self._primary = primary_client
+        self._marketing = marketing_client
+        self._fresh_data = fresh_data_client
         self._cookies = cookies or {}
         self._enable_enhanced = enable_enhanced
         self._enable_headless = enable_headless
@@ -72,6 +84,8 @@ class LinkedInDataProvider:
         # Track which sources are working
         self._source_status = {
             "primary": True,
+            "marketing": True,
+            "fresh_data": True,
             "enhanced": True,
             "headless": True,
         }
@@ -79,6 +93,8 @@ class LinkedInDataProvider:
         # Failure counts for adaptive fallback
         self._failure_counts = {
             "primary": 0,
+            "marketing": 0,
+            "fresh_data": 0,
             "enhanced": 0,
             "headless": 0,
         }
@@ -188,6 +204,46 @@ class LinkedInDataProvider:
             self._record_failure("primary", e)
             return None
 
+    async def _try_marketing(self, method_name: str, *args, **kwargs) -> dict | None:
+        """Try LinkedIn Marketing API client (Community Management)."""
+        if not self._marketing or self._should_skip_source("marketing"):
+            return None
+
+        try:
+            method = getattr(self._marketing, method_name, None)
+            if method is None:
+                return None
+
+            result = await method(*args, **kwargs)
+            if result is None:
+                return None
+            self._record_success("marketing")
+            return {"data": result, "source": "marketing_api"}
+        except Exception as e:
+            self._record_failure("marketing", e)
+            return None
+
+    async def _try_fresh_data(self, method_name: str, *args, **kwargs) -> dict | None:
+        """Try Fresh LinkedIn Data API (RapidAPI)."""
+        if not self._fresh_data or self._should_skip_source("fresh_data"):
+            return None
+
+        try:
+            method = getattr(self._fresh_data, method_name, None)
+            if method is None:
+                return None
+
+            result = await method(*args, **kwargs)
+            # Return None for empty results so fallback chain continues
+            if result is None or (isinstance(result, list) and len(result) == 0):
+                logger.info("Fresh Data API returned empty results, trying next source")
+                return None
+            self._record_success("fresh_data")
+            return {"data": result, "source": "fresh_data_api"}
+        except Exception as e:
+            self._record_failure("fresh_data", e)
+            return None
+
     async def _try_enhanced(self, method_name: str, *args, **kwargs) -> dict | None:
         """Try enhanced HTTP client."""
         if not self._enhanced or self._should_skip_source("enhanced"):
@@ -248,6 +304,11 @@ class LinkedInDataProvider:
         """
         errors = []
 
+        # Try Fresh Data API first (RapidAPI - most reliable when subscribed)
+        result = await self._try_fresh_data(method_name, *args, **kwargs)
+        if result:
+            return result
+
         # Try primary (tomquirk/linkedin-api)
         result = await self._try_primary(method_name, *args, **kwargs)
         if result:
@@ -270,7 +331,7 @@ class LinkedInDataProvider:
             f"All data sources failed for {method_name}",
             details={
                 "method": method_name,
-                "sources_tried": ["primary", "enhanced", "headless"],
+                "sources_tried": ["fresh_data", "primary", "enhanced", "headless"],
                 "suggestion": "Try refreshing cookies: linkedin-mcp-auth extract-cookies",
             },
         )
@@ -291,7 +352,7 @@ class LinkedInDataProvider:
         Returns:
             Profile data with source information
         """
-        return await self._execute_with_fallback("get_profile", public_id)
+        return await self._execute_with_fallback("get_profile", public_id=public_id)
 
     async def get_own_profile(self) -> dict[str, Any]:
         """Get the authenticated user's profile."""
@@ -376,6 +437,241 @@ class LinkedInDataProvider:
         )
 
     # =========================================================================
+    # Organization/Company Methods (Marketing API + Fresh Data API)
+    # =========================================================================
+
+    async def get_organization(
+        self,
+        organization_id: int | str | None = None,
+        vanity_name: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get organization/company data.
+
+        Tries Marketing API first (official), then Fresh Data API.
+
+        Args:
+            organization_id: LinkedIn organization numeric ID
+            vanity_name: Organization vanity name (URL slug, e.g., "microsoft")
+
+        Returns:
+            Organization data with source information
+        """
+        errors = []
+
+        # Try Marketing API (official Community Management API)
+        if organization_id:
+            result = await self._try_marketing("get_organization", organization_id)
+            if result:
+                return result
+
+        if vanity_name:
+            result = await self._try_marketing("get_organization_by_vanity_name", vanity_name)
+            if result:
+                return result
+
+        # Try Fresh Data API (RapidAPI)
+        result = await self._try_fresh_data(
+            "get_company",
+            company_id=organization_id,
+            vanity_name=vanity_name,
+        )
+        if result:
+            return result
+
+        # Try primary client if available
+        result = await self._try_primary("get_company", vanity_name or str(organization_id))
+        if result:
+            return result
+
+        raise LinkedInAPIError(
+            "Failed to get organization data from all sources",
+            details={
+                "organization_id": organization_id,
+                "vanity_name": vanity_name,
+                "sources_tried": ["marketing_api", "fresh_data_api", "primary"],
+            },
+        )
+
+    async def get_organization_follower_count(
+        self,
+        organization_id: int | str,
+    ) -> dict[str, Any]:
+        """
+        Get follower count for an organization.
+
+        Uses Marketing API (official LinkedIn API).
+
+        Args:
+            organization_id: LinkedIn organization numeric ID
+
+        Returns:
+            Follower count with source information
+        """
+        result = await self._try_marketing("get_organization_follower_count", organization_id)
+        if result:
+            return result
+
+        raise LinkedInAPIError(
+            "Failed to get organization follower count",
+            details={"organization_id": organization_id},
+        )
+
+    async def search_companies(
+        self,
+        query: str,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        """
+        Search for companies on LinkedIn.
+
+        Uses Fresh Data API (RapidAPI) for comprehensive search.
+
+        Args:
+            query: Search query (company name or keywords)
+            limit: Maximum results to return
+
+        Returns:
+            Company search results with source information
+        """
+        # Try Fresh Data API first (most comprehensive search)
+        result = await self._try_fresh_data("search_companies", query, limit=limit)
+        if result:
+            return result
+
+        # Fall back to primary client
+        result = await self._try_primary("search_companies", query, limit=limit)
+        if result:
+            return result
+
+        raise LinkedInAPIError(
+            "Failed to search companies from all sources",
+            details={"query": query},
+        )
+
+    async def get_company_employees(
+        self,
+        company_id: int | str | None = None,
+        company_name: str | None = None,
+        title_keywords: list[str] | None = None,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        """
+        Get employees of a company.
+
+        Uses Fresh Data API for employee search.
+
+        Args:
+            company_id: LinkedIn company ID
+            company_name: Company name to search
+            title_keywords: Filter by job title keywords
+            limit: Maximum results to return
+
+        Returns:
+            Employee profiles with source information
+        """
+        result = await self._try_fresh_data(
+            "get_company_employees",
+            company_id=company_id,
+            company_name=company_name,
+            title_keywords=title_keywords,
+            limit=limit,
+        )
+        if result:
+            return result
+
+        raise LinkedInAPIError(
+            "Failed to get company employees",
+            details={"company_id": company_id, "company_name": company_name},
+        )
+
+    # =========================================================================
+    # Enhanced Profile Search (Fresh Data API)
+    # =========================================================================
+
+    async def search_profiles(
+        self,
+        query: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        title_keywords: list[str] | None = None,
+        company_names: list[str] | None = None,
+        locations: list[str] | None = None,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        """
+        Advanced profile search with multiple filters.
+
+        Uses Fresh Data API for comprehensive search capabilities.
+
+        Args:
+            query: General search keywords
+            first_name: Filter by first name
+            last_name: Filter by last name
+            title_keywords: Filter by job title keywords
+            company_names: Filter by current company names
+            locations: Filter by location names
+            limit: Maximum results to return
+
+        Returns:
+            Profile search results with source information
+        """
+        sources_tried = []
+
+        # Try Fresh Data API first (most comprehensive)
+        result = await self._try_fresh_data(
+            "search_profiles",
+            query=query,
+            first_name=first_name,
+            last_name=last_name,
+            title_keywords=title_keywords,
+            company_names=company_names,
+            locations=locations,
+            limit=limit,
+        )
+        if result:
+            return result
+        sources_tried.append("fresh_data_api")
+
+        # Build search kwargs for simplified clients
+        search_kwargs = {"limit": limit}
+        if query:
+            search_kwargs["keywords"] = query
+        if title_keywords and len(title_keywords) > 0:
+            search_kwargs["keyword_title"] = title_keywords[0]
+        if company_names and len(company_names) > 0:
+            search_kwargs["keyword_company"] = company_names[0]
+
+        # Fall back to primary client
+        if query:
+            result = await self._try_primary("search_people", **search_kwargs)
+            if result:
+                return result
+            sources_tried.append("primary")
+
+        # Fall back to enhanced client
+        result = await self._try_enhanced("search_people", **search_kwargs)
+        if result:
+            return result
+        sources_tried.append("enhanced")
+
+        # Fall back to headless browser
+        result = await self._try_headless("search_people", **search_kwargs)
+        if result:
+            return result
+        sources_tried.append("headless")
+
+        raise LinkedInAPIError(
+            "Failed to search profiles from all sources",
+            details={
+                "query": query,
+                "filters": {"first_name": first_name, "last_name": last_name},
+                "sources_tried": sources_tried,
+                "suggestion": "Fresh Data API requires subscription: https://rapidapi.com/rockapis-rockapis-default/api/fresh-linkedin-profile-data",
+            },
+        )
+
+    # =========================================================================
     # Status and Control
     # =========================================================================
 
@@ -387,7 +683,19 @@ class LinkedInDataProvider:
                     "available": self._primary is not None,
                     "enabled": self._source_status.get("primary", False),
                     "failures": self._failure_counts.get("primary", 0),
-                    "type": "linkedin-api",
+                    "type": "linkedin-api (unofficial)",
+                },
+                "marketing": {
+                    "available": self._marketing is not None,
+                    "enabled": self._source_status.get("marketing", False),
+                    "failures": self._failure_counts.get("marketing", 0),
+                    "type": "LinkedIn Marketing API (Community Management)",
+                },
+                "fresh_data": {
+                    "available": self._fresh_data is not None,
+                    "enabled": self._source_status.get("fresh_data", False),
+                    "failures": self._failure_counts.get("fresh_data", 0),
+                    "type": "Fresh LinkedIn Data API (RapidAPI)",
                 },
                 "enhanced": {
                     "available": self._enhanced is not None,
@@ -419,11 +727,23 @@ class LinkedInDataProvider:
 
     def reset_all_sources(self) -> None:
         """Reset all sources to try them again."""
-        for source in ["primary", "enhanced", "headless"]:
+        for source in ["primary", "marketing", "fresh_data", "enhanced", "headless"]:
             self.reset_source(source)
 
     async def close(self) -> None:
         """Close all data sources."""
+        if self._marketing:
+            try:
+                await self._marketing.close()
+            except Exception:
+                pass
+
+        if self._fresh_data:
+            try:
+                await self._fresh_data.close()
+            except Exception:
+                pass
+
         if self._enhanced:
             try:
                 await self._enhanced.close()
@@ -445,6 +765,8 @@ class LinkedInDataProvider:
 
 async def create_data_provider(
     primary_client: Any | None = None,
+    marketing_client: "LinkedInMarketingClient | None" = None,
+    fresh_data_client: "FreshLinkedInDataClient | None" = None,
     li_at: str | None = None,
     jsessionid: str | None = None,
     enable_enhanced: bool = True,
@@ -455,6 +777,8 @@ async def create_data_provider(
 
     Args:
         primary_client: Optional tomquirk/linkedin-api client
+        marketing_client: LinkedIn Marketing API client (Community Management)
+        fresh_data_client: Fresh LinkedIn Data API client (RapidAPI)
         li_at: LinkedIn session cookie
         jsessionid: JSESSIONID cookie
         enable_enhanced: Enable enhanced HTTP client
@@ -471,6 +795,8 @@ async def create_data_provider(
 
     provider = LinkedInDataProvider(
         primary_client=primary_client,
+        marketing_client=marketing_client,
+        fresh_data_client=fresh_data_client,
         cookies=cookies,
         enable_enhanced=enable_enhanced,
         enable_headless=enable_headless,
