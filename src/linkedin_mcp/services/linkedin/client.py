@@ -529,19 +529,49 @@ class LinkedInClient:
             message: Optional personalized message
 
         Returns:
-            Request result
+            dict with success status and details
         """
         logger.info("Sending connection request", public_id=public_id)
-        return await self._execute(
+        result = await self._execute(
             self._client.add_connection,
             public_id,
             message=message,
         )
 
+        # linkedin-api add_connection returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Connection request may not have been sent.",
+            }
+
+        return {
+            "success": True,
+            "message": "Connection request sent successfully",
+            "profile_id": public_id,
+        }
+
     async def remove_connection(self, public_id: str) -> dict[str, Any]:
-        """Remove a connection."""
+        """Remove a connection.
+
+        Returns:
+            dict with success status and details
+        """
         logger.info("Removing connection", public_id=public_id)
-        return await self._execute(self._client.remove_connection, public_id)
+        result = await self._execute(self._client.remove_connection, public_id)
+
+        # linkedin-api remove_connection returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Connection may not have been removed.",
+            }
+
+        return {
+            "success": True,
+            "message": "Connection removed successfully",
+            "profile_id": public_id,
+        }
 
     async def get_pending_invitations(
         self,
@@ -562,33 +592,77 @@ class LinkedInClient:
         return await self._execute(self._client.get_invitations)
 
     async def accept_invitation(self, invitation_id: str, shared_secret: str) -> dict[str, Any]:
-        """Accept a connection invitation."""
+        """Accept a connection invitation.
+
+        Returns:
+            dict with success status and details
+        """
         logger.info("Accepting invitation", invitation_id=invitation_id)
-        return await self._execute(
+        result = await self._execute(
             self._client.reply_invitation,
             invitation_id,
             shared_secret,
             action="accept",
         )
 
+        # linkedin-api reply_invitation returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Invitation may not have been accepted.",
+            }
+
+        return {
+            "success": True,
+            "message": "Connection invitation accepted successfully",
+            "invitation_id": invitation_id,
+        }
+
     async def reject_invitation(self, invitation_id: str, shared_secret: str) -> dict[str, Any]:
-        """Reject a connection invitation."""
+        """Reject a connection invitation.
+
+        Returns:
+            dict with success status and details
+        """
         logger.info("Rejecting invitation", invitation_id=invitation_id)
-        return await self._execute(
+        result = await self._execute(
             self._client.reply_invitation,
             invitation_id,
             shared_secret,
             action="ignore",
         )
 
+        # linkedin-api reply_invitation returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Invitation may not have been rejected.",
+            }
+
+        return {
+            "success": True,
+            "message": "Connection invitation rejected successfully",
+            "invitation_id": invitation_id,
+        }
+
     # ==========================================================================
     # Messaging Methods
     # ==========================================================================
 
     async def get_conversations(self) -> list[dict[str, Any]]:
-        """Get messaging conversations."""
+        """Get messaging conversations.
+
+        Returns:
+            List of conversation dicts extracted from API response.
+        """
         logger.info("Fetching conversations")
-        return await self._execute(self._client.get_conversations)
+        result = await self._execute(self._client.get_conversations)
+        # The linkedin-api returns raw JSON response with structure:
+        # {"elements": [...], "paging": {...}}
+        # We need to extract just the elements list
+        if isinstance(result, dict):
+            return result.get("elements", [])
+        return result if isinstance(result, list) else []
 
     async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Get a specific conversation."""
@@ -604,18 +678,72 @@ class LinkedInClient:
         Send a message to one or more recipients.
 
         Args:
-            recipients: List of profile public IDs
+            recipients: List of profile public IDs (will be converted to URNs)
             text: Message content
 
         Returns:
-            Message data
+            dict with success status and details
         """
         logger.info("Sending message", recipient_count=len(recipients))
-        return await self._execute(
+
+        # Convert public IDs to member URNs
+        # linkedin-api expects URN IDs like "ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w"
+        # not public IDs like "johndoe"
+        member_urns = []
+        for public_id in recipients:
+            try:
+                # Get profile to extract the URN
+                profile = await self._execute(self._client.get_profile, public_id)
+                if not profile:
+                    logger.warning("Could not find profile", public_id=public_id)
+                    continue
+
+                # Extract member URN from profile
+                # profile_urn is like "urn:li:fs_miniProfile:ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w"
+                profile_urn = profile.get("profile_urn", "")
+                if profile_urn:
+                    member_id = profile_urn.split(":")[-1]
+                    member_urns.append(member_id)
+                    logger.debug("Converted public_id to URN", public_id=public_id, member_id=member_id)
+                else:
+                    # Try entityUrn as fallback
+                    entity_urn = profile.get("entityUrn", "")
+                    if entity_urn:
+                        member_id = entity_urn.split(":")[-1]
+                        member_urns.append(member_id)
+                    else:
+                        logger.warning("Could not extract URN from profile", public_id=public_id)
+            except Exception as e:
+                logger.warning("Failed to get profile for messaging", public_id=public_id, error=str(e))
+                continue
+
+        if not member_urns:
+            return {
+                "success": False,
+                "error": "Could not resolve any recipient URNs. Ensure recipients are valid LinkedIn public IDs.",
+            }
+
+        # Send the message
+        # linkedin-api send_message returns True on ERROR, False on success
+        result = await self._execute(
             self._client.send_message,
             text,
-            recipients=recipients,
+            recipients=member_urns,
         )
+
+        # Handle boolean return: True = error, False = success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Message may not have been sent.",
+            }
+
+        return {
+            "success": True,
+            "message": "Message sent successfully",
+            "recipients": recipients,
+            "recipient_urns": member_urns,
+        }
 
     # ==========================================================================
     # Search Methods
@@ -814,14 +942,27 @@ class LinkedInClient:
             message: Optional personalized message (max 300 chars)
 
         Returns:
-            Invitation result
+            dict with success status and details
         """
         logger.info("Sending invitation", profile_id=profile_public_id)
-        return await self._execute(
+        result = await self._execute(
             self._client.add_connection,
             profile_public_id,
             message=message,
         )
+
+        # linkedin-api add_connection returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Connection invitation may not have been sent.",
+            }
+
+        return {
+            "success": True,
+            "message": "Connection invitation sent successfully",
+            "profile_id": profile_public_id,
+        }
 
     async def withdraw_invitation(self, invitation_id: str) -> dict[str, Any]:
         """
@@ -831,13 +972,26 @@ class LinkedInClient:
             invitation_id: ID of the invitation to withdraw
 
         Returns:
-            Withdrawal result
+            dict with success status and details
         """
         logger.info("Withdrawing invitation", invitation_id=invitation_id)
-        return await self._execute(
+        result = await self._execute(
             self._client.remove_connection,
             invitation_id,
         )
+
+        # linkedin-api remove_connection returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Invitation may not have been withdrawn.",
+            }
+
+        return {
+            "success": True,
+            "message": "Connection invitation withdrawn successfully",
+            "invitation_id": invitation_id,
+        }
 
     # ==========================================================================
     # Profile Enrichment Methods (for comprehensive profile data)

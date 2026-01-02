@@ -1546,10 +1546,11 @@ async def send_connection_request(profile_id: str, message: str | None = None) -
 
     try:
         result = await ctx.linkedin_client.send_connection_request(profile_id, message=message)
-        return {"success": True, "result": result, "profile_id": profile_id}
+        # Client now returns dict with success/error status
+        return result
     except Exception as e:
         logger.error("Failed to send connection request", error=str(e), profile_id=profile_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -1573,10 +1574,11 @@ async def remove_connection(profile_id: str) -> dict:
 
     try:
         result = await ctx.linkedin_client.remove_connection(profile_id)
-        return {"success": True, "result": result, "profile_id": profile_id}
+        # Client now returns dict with success/error status
+        return result
     except Exception as e:
         logger.error("Failed to remove connection", error=str(e), profile_id=profile_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -1633,10 +1635,11 @@ async def accept_invitation(invitation_id: str, shared_secret: str) -> dict:
 
     try:
         result = await ctx.linkedin_client.accept_invitation(invitation_id, shared_secret)
-        return {"success": True, "result": result}
+        # Client now returns dict with success/error status
+        return result
     except Exception as e:
         logger.error("Failed to accept invitation", error=str(e), invitation_id=invitation_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -1661,10 +1664,11 @@ async def reject_invitation(invitation_id: str, shared_secret: str) -> dict:
 
     try:
         result = await ctx.linkedin_client.reject_invitation(invitation_id, shared_secret)
-        return {"success": True, "result": result}
+        # Client now returns dict with success/error status
+        return result
     except Exception as e:
         logger.error("Failed to reject invitation", error=str(e), invitation_id=invitation_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -1703,8 +1707,12 @@ async def send_bulk_messages(profile_ids: str, text: str) -> dict:
 
     for profile_id in ids:
         try:
-            await ctx.linkedin_client.send_message([profile_id], text)
-            results.append({"profile_id": profile_id, "success": True})
+            result = await ctx.linkedin_client.send_message([profile_id], text)
+            # Check the actual result from the client
+            if result.get("success"):
+                results.append({"profile_id": profile_id, "success": True})
+            else:
+                errors.append({"profile_id": profile_id, "error": result.get("error", "Unknown error")})
         except Exception as e:
             logger.warning("Failed to send message", profile_id=profile_id, error=str(e))
             errors.append({"profile_id": profile_id, "error": str(e)})
@@ -1803,10 +1811,11 @@ async def send_message(profile_id: str, text: str) -> dict:
 
     try:
         result = await ctx.linkedin_client.send_message([profile_id], text)
-        return {"success": True, "message": result}
+        # Client now returns dict with success/error status
+        return result
     except Exception as e:
         logger.error("Failed to send message", error=str(e), recipient=profile_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
@@ -2172,14 +2181,13 @@ async def send_connection_invitation(profile_public_id: str, message: str | None
             profile_public_id=profile_public_id,
             message=message,
         )
-        return {
-            "success": True,
-            "result": result,
-            "note": "Connection request sent. Use sparingly to avoid restrictions.",
-        }
+        # Client now returns dict with success/error status
+        if result.get("success"):
+            result["note"] = "Connection request sent. Use sparingly to avoid restrictions."
+        return result
     except Exception as e:
         logger.error("Failed to send invitation", error=str(e), profile_id=profile_public_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -2203,10 +2211,11 @@ async def withdraw_connection_invitation(invitation_id: str) -> dict:
 
     try:
         result = await ctx.linkedin_client.withdraw_invitation(invitation_id)
-        return {"success": True, "result": result}
+        # Client now returns dict with success/error status
+        return result
     except Exception as e:
         logger.error("Failed to withdraw invitation", error=str(e), invitation_id=invitation_id)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
