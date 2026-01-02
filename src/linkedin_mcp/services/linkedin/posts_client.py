@@ -40,6 +40,53 @@ class MediaType(str, Enum):
     DOCUMENT = "DOCUMENT"
 
 
+def escape_little_text(text: str, preserve_hashtags: bool = True) -> str:
+    """
+    Escape reserved characters for LinkedIn's 'little text' format.
+
+    LinkedIn's Posts API uses a special text format that requires certain
+    characters to be escaped with a backslash to be treated as plaintext.
+
+    Reserved characters: | { } @ [ ] ( ) < > # \\ * _ ~
+
+    Args:
+        text: The text to escape
+        preserve_hashtags: If True, don't escape # when followed by word characters
+                          (allows hashtags like #AI to work). Default True.
+
+    See: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/little-text-format
+    """
+    import re
+
+    # Characters to always escape (order matters: backslash first)
+    always_escape = ["\\", "|", "{", "}", "[", "]", "<", ">", "*", "_", "~"]
+
+    # Start with the original text
+    result = text
+
+    # Escape backslash first to avoid double-escaping
+    for char in always_escape:
+        result = result.replace(char, f"\\{char}")
+
+    # Handle @ - escape unless it looks like a mention @[Name](urn:...)
+    # For now, escape all @ since we don't support mentions yet
+    result = result.replace("@", "\\@")
+
+    # Handle ( and ) - escape them
+    result = result.replace("(", "\\(")
+    result = result.replace(")", "\\)")
+
+    # Handle # - preserve hashtags if requested
+    if preserve_hashtags:
+        # Escape # only when NOT followed by a word character (not a hashtag)
+        # This preserves #hashtag but escapes standalone # or # followed by space
+        result = re.sub(r"#(?!\w)", r"\\#", result)
+    else:
+        result = result.replace("#", "\\#")
+
+    return result
+
+
 class LinkedInPostsClient:
     """
     LinkedIn Posts API client for content creation.
@@ -117,9 +164,18 @@ class LinkedInPostsClient:
             logger.warning("Post text exceeds 3000 characters, will be truncated")
             text = text[:3000]
 
+        # Escape reserved characters for LinkedIn's 'little text' format
+        # This prevents truncation issues with special characters
+        escaped_text = escape_little_text(text)
+        logger.debug(
+            "Escaped text for LinkedIn",
+            original_length=len(text),
+            escaped_length=len(escaped_text),
+        )
+
         payload = {
             "author": self.member_urn,
-            "commentary": text,
+            "commentary": escaped_text,
             "visibility": visibility.value,
             "distribution": {
                 "feedDistribution": "MAIN_FEED",
@@ -309,9 +365,12 @@ class LinkedInPostsClient:
             return {"success": False, "error": "Failed to upload image"}
 
         # Create the post with the image
+        # Escape reserved characters for LinkedIn's 'little text' format
+        escaped_text = escape_little_text(text[:3000]) if text else ""
+
         payload = {
             "author": self.member_urn,
-            "commentary": text[:3000] if text else "",
+            "commentary": escaped_text,
             "visibility": visibility.value,
             "distribution": {
                 "feedDistribution": "MAIN_FEED",
@@ -395,9 +454,12 @@ class LinkedInPostsClient:
 
         poll_options = [{"text": opt[:140]} for opt in options]  # Max 140 chars per option
 
+        # Escape reserved characters for LinkedIn's 'little text' format
+        escaped_question = escape_little_text(question[:3000])
+
         payload = {
             "author": self.member_urn,
-            "commentary": question[:3000],
+            "commentary": escaped_question,
             "visibility": visibility.value,
             "distribution": {
                 "feedDistribution": "MAIN_FEED",
