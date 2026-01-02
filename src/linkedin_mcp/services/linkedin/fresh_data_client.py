@@ -622,6 +622,101 @@ class FreshLinkedInDataClient:
         }
 
     # =========================================================================
+    # Post & Engagement APIs (FUTURE IMPLEMENTATION)
+    # =========================================================================
+    # The Fresh Data API (web-scraping-api2) provides these post/engagement
+    # endpoints that can be implemented to replace unreliable linkedin-api tools:
+    #
+    # AVAILABLE ENDPOINTS (from API research, January 2026):
+    # -------------------------------------------------------
+    # 1. GET /get-user-posts
+    #    - Retrieve a user's activity and posts
+    #    - Params: linkedin_url or profile_id
+    #    - Returns: List of posts with content, timestamps, engagement counts
+    #
+    # 2. GET /get-user-comments
+    #    - Access comments made by a specific user
+    #    - Params: linkedin_url or profile_id
+    #    - Returns: List of comments with post context
+    #
+    # 3. GET /get-user-reactions
+    #    - See a user's engagement with content (likes, etc.)
+    #    - Params: linkedin_url or profile_id
+    #    - Returns: List of posts the user has reacted to
+    #
+    # 4. GET /get-post-details
+    #    - Retrieve complete information about a specific post
+    #    - Params: post_url or post_urn
+    #    - Returns: Full post content, author, media, engagement metrics
+    #
+    # 5. GET /get-post-comments
+    #    - Get comments on a specific LinkedIn post
+    #    - Params: post_url or post_urn, limit
+    #    - Returns: List of comments with author info and nested replies
+    #
+    # 6. GET /get-post-reactions
+    #    - View reaction data (likes, celebrates, etc.) for a post
+    #    - Params: post_url or post_urn
+    #    - Returns: Reaction breakdown by type, list of reactors
+    #
+    # 7. GET /get-post-reposts
+    #    - See who has reshared a particular post
+    #    - Params: post_url or post_urn
+    #    - Returns: List of users who reshared with their post URLs
+    #
+    # PRICING (Ultra tier - $200/month):
+    # - 100,000 requests/month
+    # - 120 requests/minute rate limit
+    # - 98% service level claimed
+    #
+    # API DOCUMENTATION:
+    # - https://fdocs.info/api-reference/quickstart
+    # - https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2
+    #
+    # IMPLEMENTATION PRIORITY (recommended):
+    # 1. get_user_posts - For feed and profile posts retrieval
+    # 2. get_post_details - For individual post analysis
+    # 3. get_post_comments - For engagement analytics
+    # 4. get_post_reactions - For engagement breakdown
+    # =========================================================================
+
+    # Placeholder stubs for future implementation:
+    #
+    # async def get_user_posts(
+    #     self,
+    #     linkedin_url: str | None = None,
+    #     public_id: str | None = None,
+    #     limit: int = 10,
+    # ) -> list[dict[str, Any]]:
+    #     """Get posts from a LinkedIn profile."""
+    #     pass
+    #
+    # async def get_post_details(
+    #     self,
+    #     post_url: str | None = None,
+    #     post_urn: str | None = None,
+    # ) -> dict[str, Any] | None:
+    #     """Get detailed information about a specific post."""
+    #     pass
+    #
+    # async def get_post_comments(
+    #     self,
+    #     post_url: str | None = None,
+    #     post_urn: str | None = None,
+    #     limit: int = 50,
+    # ) -> list[dict[str, Any]]:
+    #     """Get comments on a specific post."""
+    #     pass
+    #
+    # async def get_post_reactions(
+    #     self,
+    #     post_url: str | None = None,
+    #     post_urn: str | None = None,
+    # ) -> dict[str, Any]:
+    #     """Get reaction breakdown for a post."""
+    #     pass
+
+    # =========================================================================
     # Status Methods
     # =========================================================================
 
@@ -638,6 +733,16 @@ class FreshLinkedInDataClient:
                 "search_companies",
                 "get_company_employees",
             ],
+            "future_features": [
+                # These endpoints are available in the API but not yet implemented
+                "get_user_posts",
+                "get_user_comments",
+                "get_user_reactions",
+                "get_post_details",
+                "get_post_comments",
+                "get_post_reactions",
+                "get_post_reposts",
+            ],
             "documentation": "https://fdocs.info/api-reference/quickstart",
-            "pricing": "https://rapidapi.com/freshdata-freshdata-default/api/fresh-linkedin-profile-data/pricing",
+            "subscription": "https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2",
         }

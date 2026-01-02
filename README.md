@@ -1,10 +1,14 @@
 # LinkedIn MCP Server
 
-> **AI-powered LinkedIn content creation, scheduling, and analytics.**
+> **AI-powered LinkedIn content creation, research, and analytics.**
 >
-> Create posts, manage drafts, schedule content, analyze performance, and grow your professional presence—all through natural conversation with Claude.
+> Create posts, manage drafts, schedule content, research professionals and companies, and analyze engagement—all through natural conversation with Claude.
 
-A Model Context Protocol (MCP) server that connects Claude to LinkedIn, enabling seamless content workflows powered by the Official LinkedIn API and Fresh Data API.
+A Model Context Protocol (MCP) server that connects Claude to LinkedIn, enabling seamless content workflows powered by the **Official LinkedIn API** (for posting) and **Fresh Data API** (for reliable data retrieval).
+
+**Why two APIs?** LinkedIn aggressively blocks unofficial access. This server combines:
+- **Official LinkedIn API**: Reliable content creation (posts, polls, images)
+- **Fresh Data API (RapidAPI)**: Reliable profile/company/engagement data (98% uptime)
 
 ---
 
@@ -301,20 +305,15 @@ Claude: Found Dario Amodei's profile:
 ### Engagement Analytics
 | Tool | Description |
 |------|-------------|
+| `get_feed(limit)` | Get your LinkedIn feed |
+| `get_profile_posts(profile_id, limit)` | Get posts from a profile |
+| `get_post_reactions(post_urn)` | Get reactions on a post |
+| `get_post_comments(post_urn)` | Get comments on a post |
 | `analyze_engagement(post_urn)` | Deep engagement analysis |
 | `analyze_content_performance(profile_id)` | Content patterns |
 | `analyze_optimal_posting_times(profile_id)` | Best times to post |
 | `analyze_hashtag_performance(profile_id)` | Hashtag effectiveness |
 | `generate_engagement_report(profile_id)` | Full engagement report |
-
-### Connections & Messaging
-| Tool | Description |
-|------|-------------|
-| `get_connections(limit)` | Get your connections |
-| `send_connection_request(profile_id, message)` | Send connection request |
-| `get_pending_invitations(sent)` | View pending invitations |
-| `get_conversations(limit)` | Get message threads |
-| `send_message(profile_id, text)` | Send a message |
 
 ---
 
@@ -352,27 +351,35 @@ python -m linkedin_mcp                # Alternative server start
 
 ## Architecture
 
-The server uses a **multi-tier data provider** with intelligent fallback:
+The server uses a **dual-API architecture** for maximum reliability:
 
 ```
-Profile Request → Profile Enrichment Engine
-                    ├── Fresh Data API (RapidAPI) - Primary, most reliable
-                    ├── Official LinkedIn API - Authenticated user data
-                    ├── linkedin-api library - Session-based scraping
-                    └── Browser Automation - Headless fallback
+Profile/Search → Fresh Data API (RapidAPI)
+                    └── Reliable, paid service with 98% uptime
+                    └── Endpoints: profiles, companies, search, posts, engagement
 
-Content Request → Official LinkedIn API (OAuth 2.0)
+Content Creation → Official LinkedIn API (OAuth 2.0)
                     └── Share on LinkedIn product
+                    └── Endpoints: posts, polls, images, article links
 ```
 
 ### Data Sources
 
 | Source | Use Case | Reliability |
 |--------|----------|-------------|
-| **Fresh Data API** | Profile viewing, search | High (paid API) |
-| **Official API** | Posting, user profile | High (OAuth) |
-| **linkedin-api** | Extended features | Medium (session) |
-| **Browser** | Fallback scraping | Medium (automation) |
+| **Fresh Data API** | Profile viewing, search, posts, engagement | High (paid API) |
+| **Official API** | Content creation, your profile | High (OAuth) |
+
+### API Limitations
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Text/Image/Poll Posts | ✅ Supported | Via Official API |
+| Article Link Shares | ✅ Supported | External URLs with metadata |
+| Native LinkedIn Articles | ❌ Not Available | LinkedIn API limitation |
+| Newsletters | ❌ Not Available | No API access |
+| Direct Messages | ❌ Removed | LinkedIn blocks unofficial access |
+| Connection Requests | ❌ Removed | LinkedIn blocks unofficial access |
 
 ---
 
@@ -416,6 +423,14 @@ linkedin-mcp-auth extract-cookies --browser chrome
 1. Ensure `THIRDPARTY_RAPIDAPI_KEY` is set in your Claude config
 2. Restart Claude Desktop after config changes
 3. The Fresh Data API is the primary source for profile data
+
+**Why are messaging/connection features not available?**
+LinkedIn aggressively blocks unofficial API access (cookie-based authentication). These features have been removed because they were unreliable:
+- Direct messaging
+- Sending/accepting connection requests
+- Liking/commenting on posts
+
+The remaining features use either the **Official LinkedIn API** (OAuth) or **Fresh Data API** (RapidAPI), both of which are reliable.
 
 ---
 
