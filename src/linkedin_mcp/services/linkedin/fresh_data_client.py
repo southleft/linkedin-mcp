@@ -622,99 +622,413 @@ class FreshLinkedInDataClient:
         }
 
     # =========================================================================
-    # Post & Engagement APIs (FUTURE IMPLEMENTATION)
-    # =========================================================================
-    # The Fresh Data API (web-scraping-api2) provides these post/engagement
-    # endpoints that can be implemented to replace unreliable linkedin-api tools:
-    #
-    # AVAILABLE ENDPOINTS (from API research, January 2026):
-    # -------------------------------------------------------
-    # 1. GET /get-user-posts
-    #    - Retrieve a user's activity and posts
-    #    - Params: linkedin_url or profile_id
-    #    - Returns: List of posts with content, timestamps, engagement counts
-    #
-    # 2. GET /get-user-comments
-    #    - Access comments made by a specific user
-    #    - Params: linkedin_url or profile_id
-    #    - Returns: List of comments with post context
-    #
-    # 3. GET /get-user-reactions
-    #    - See a user's engagement with content (likes, etc.)
-    #    - Params: linkedin_url or profile_id
-    #    - Returns: List of posts the user has reacted to
-    #
-    # 4. GET /get-post-details
-    #    - Retrieve complete information about a specific post
-    #    - Params: post_url or post_urn
-    #    - Returns: Full post content, author, media, engagement metrics
-    #
-    # 5. GET /get-post-comments
-    #    - Get comments on a specific LinkedIn post
-    #    - Params: post_url or post_urn, limit
-    #    - Returns: List of comments with author info and nested replies
-    #
-    # 6. GET /get-post-reactions
-    #    - View reaction data (likes, celebrates, etc.) for a post
-    #    - Params: post_url or post_urn
-    #    - Returns: Reaction breakdown by type, list of reactors
-    #
-    # 7. GET /get-post-reposts
-    #    - See who has reshared a particular post
-    #    - Params: post_url or post_urn
-    #    - Returns: List of users who reshared with their post URLs
-    #
-    # PRICING (Ultra tier - $200/month):
-    # - 100,000 requests/month
-    # - 120 requests/minute rate limit
-    # - 98% service level claimed
-    #
-    # API DOCUMENTATION:
-    # - https://fdocs.info/api-reference/quickstart
-    # - https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2
-    #
-    # IMPLEMENTATION PRIORITY (recommended):
-    # 1. get_user_posts - For feed and profile posts retrieval
-    # 2. get_post_details - For individual post analysis
-    # 3. get_post_comments - For engagement analytics
-    # 4. get_post_reactions - For engagement breakdown
+    # Post & Engagement APIs
     # =========================================================================
 
-    # Placeholder stubs for future implementation:
-    #
-    # async def get_user_posts(
-    #     self,
-    #     linkedin_url: str | None = None,
-    #     public_id: str | None = None,
-    #     limit: int = 10,
-    # ) -> list[dict[str, Any]]:
-    #     """Get posts from a LinkedIn profile."""
-    #     pass
-    #
-    # async def get_post_details(
-    #     self,
-    #     post_url: str | None = None,
-    #     post_urn: str | None = None,
-    # ) -> dict[str, Any] | None:
-    #     """Get detailed information about a specific post."""
-    #     pass
-    #
-    # async def get_post_comments(
-    #     self,
-    #     post_url: str | None = None,
-    #     post_urn: str | None = None,
-    #     limit: int = 50,
-    # ) -> list[dict[str, Any]]:
-    #     """Get comments on a specific post."""
-    #     pass
-    #
-    # async def get_post_reactions(
-    #     self,
-    #     post_url: str | None = None,
-    #     post_urn: str | None = None,
-    # ) -> dict[str, Any]:
-    #     """Get reaction breakdown for a post."""
-    #     pass
+    async def get_profile_posts(
+        self,
+        linkedin_url: str | None = None,
+        public_id: str | None = None,
+        post_type: str = "posts",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Get posts from a LinkedIn profile.
+
+        Args:
+            linkedin_url: Full LinkedIn profile URL
+            public_id: LinkedIn public ID (e.g., "williamhgates")
+            post_type: Type of content - "posts", "comments", or "reactions"
+            limit: Maximum posts to return (API returns ~50 per page)
+
+        Returns:
+            List of post dicts with content, engagement counts, media
+        """
+        if not linkedin_url and not public_id:
+            logger.error("Must provide either linkedin_url or public_id")
+            return []
+
+        if not linkedin_url and public_id:
+            linkedin_url = f"https://www.linkedin.com/in/{public_id}"
+
+        client = await self._get_client()
+        all_posts: list[dict[str, Any]] = []
+        start = 0
+
+        try:
+            while len(all_posts) < limit:
+                params = {
+                    "linkedin_url": linkedin_url,
+                    "type": post_type,
+                    "start": start,
+                }
+
+                response = await client.get(
+                    f"{self.API_BASE}/get-profile-posts",
+                    params=params,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    posts = data.get("data", [])
+                    if not posts:
+                        break
+
+                    for post in posts:
+                        all_posts.append(self._normalize_post(post))
+                        if len(all_posts) >= limit:
+                            break
+
+                    start += 50  # Pagination increment
+                elif response.status_code == 403:
+                    error_msg = response.json().get("message", "Access denied")
+                    logger.error("Fresh Data API subscription required", error=error_msg)
+                    raise PermissionError(f"Fresh Data API: {error_msg}")
+                else:
+                    logger.error("Failed to get posts", status=response.status_code)
+                    break
+
+            logger.info("Profile posts retrieved", count=len(all_posts))
+            return all_posts[:limit]
+
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.error("Profile posts error", error=str(e))
+            return []
+
+    async def get_company_posts(
+        self,
+        linkedin_url: str | None = None,
+        company_id: str | None = None,
+        sort_by: str = "recent",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Get posts from a company page.
+
+        Args:
+            linkedin_url: Full LinkedIn company URL
+            company_id: LinkedIn company ID
+            sort_by: "recent" or "top"
+            limit: Maximum posts to return
+
+        Returns:
+            List of post dicts
+        """
+        if not linkedin_url and not company_id:
+            logger.error("Must provide either linkedin_url or company_id")
+            return []
+
+        if not linkedin_url and company_id:
+            linkedin_url = f"https://www.linkedin.com/company/{company_id}"
+
+        client = await self._get_client()
+        all_posts: list[dict[str, Any]] = []
+        start = 0
+
+        try:
+            while len(all_posts) < limit:
+                params = {
+                    "linkedin_url": linkedin_url,
+                    "sort_by": sort_by,
+                    "start": start,
+                }
+
+                response = await client.get(
+                    f"{self.API_BASE}/get-company-posts",
+                    params=params,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    posts = data.get("data", [])
+                    if not posts:
+                        break
+
+                    for post in posts:
+                        all_posts.append(self._normalize_post(post))
+                        if len(all_posts) >= limit:
+                            break
+
+                    start += 50
+                elif response.status_code == 403:
+                    error_msg = response.json().get("message", "Access denied")
+                    raise PermissionError(f"Fresh Data API: {error_msg}")
+                else:
+                    logger.error("Failed to get company posts", status=response.status_code)
+                    break
+
+            logger.info("Company posts retrieved", count=len(all_posts))
+            return all_posts[:limit]
+
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.error("Company posts error", error=str(e))
+            return []
+
+    async def get_post_comments(
+        self,
+        post_urn: str,
+        sort_by: str = "relevance",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Get comments on a specific post.
+
+        Args:
+            post_urn: Post URN (e.g., "urn:li:activity:123456789")
+            sort_by: "relevance" or "recent"
+            limit: Maximum comments to return
+
+        Returns:
+            List of comment dicts with author info
+        """
+        client = await self._get_client()
+        all_comments: list[dict[str, Any]] = []
+        page = 0
+
+        try:
+            while len(all_comments) < limit:
+                params = {
+                    "urn": post_urn,
+                    "sort_by": "Most relevant" if sort_by == "relevance" else "Most recent",
+                    "page": page,
+                }
+
+                response = await client.get(
+                    f"{self.API_BASE}/get-post-comments",
+                    params=params,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    comments = data.get("data", [])
+                    if not comments:
+                        break
+
+                    for comment in comments:
+                        all_comments.append(self._normalize_comment(comment))
+                        if len(all_comments) >= limit:
+                            break
+
+                    page += 1
+                elif response.status_code == 403:
+                    error_msg = response.json().get("message", "Access denied")
+                    raise PermissionError(f"Fresh Data API: {error_msg}")
+                else:
+                    logger.error("Failed to get comments", status=response.status_code)
+                    break
+
+            logger.info("Post comments retrieved", count=len(all_comments))
+            return all_comments[:limit]
+
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.error("Post comments error", error=str(e))
+            return []
+
+    async def get_post_reactions(
+        self,
+        post_urn: str,
+        reaction_type: str = "ALL",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """
+        Get reactions on a specific post.
+
+        Args:
+            post_urn: Post URN (e.g., "urn:li:activity:123456789")
+            reaction_type: "ALL", "LIKE", "EMPATHY", "APPRECIATION", "INTEREST", "PRAISE"
+            limit: Maximum reactors to return
+
+        Returns:
+            Dict with reaction breakdown and list of reactors
+        """
+        client = await self._get_client()
+        all_reactors: list[dict[str, Any]] = []
+        page = 0
+
+        try:
+            while len(all_reactors) < limit:
+                params = {
+                    "urn": post_urn,
+                    "type": reaction_type,
+                    "page": page,
+                }
+
+                response = await client.get(
+                    f"{self.API_BASE}/get-post-reactions",
+                    params=params,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    reactors = data.get("data", [])
+                    total_count = data.get("total_count", 0)
+
+                    if not reactors:
+                        break
+
+                    for reactor in reactors:
+                        all_reactors.append({
+                            "name": reactor.get("name"),
+                            "headline": reactor.get("headline"),
+                            "profile_url": reactor.get("linkedin_url"),
+                            "profile_image": reactor.get("profile_image_url"),
+                            "reaction_type": reactor.get("reaction_type"),
+                        })
+                        if len(all_reactors) >= limit:
+                            break
+
+                    page += 1
+                elif response.status_code == 403:
+                    error_msg = response.json().get("message", "Access denied")
+                    raise PermissionError(f"Fresh Data API: {error_msg}")
+                else:
+                    logger.error("Failed to get reactions", status=response.status_code)
+                    break
+
+            logger.info("Post reactions retrieved", count=len(all_reactors))
+            return {
+                "total_count": len(all_reactors),
+                "reactors": all_reactors[:limit],
+                "source": "fresh_data_api",
+            }
+
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.error("Post reactions error", error=str(e))
+            return {"total_count": 0, "reactors": [], "error": str(e)}
+
+    async def search_posts(
+        self,
+        keywords: str | None = None,
+        sort_by: str = "recent",
+        date_posted: str | None = None,
+        content_type: str | None = None,
+        from_member_urns: list[str] | None = None,
+        from_company_ids: list[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """
+        Search LinkedIn posts.
+
+        Args:
+            keywords: Search keywords
+            sort_by: "recent" (Latest) or "top" (Top match)
+            date_posted: "Past 24 hours", "Past week", "Past month", etc.
+            content_type: "Videos", "Images", "Documents", etc.
+            from_member_urns: Filter to specific member URNs
+            from_company_ids: Filter to specific company IDs
+            limit: Maximum posts to return
+
+        Returns:
+            List of matching posts
+        """
+        client = await self._get_client()
+
+        try:
+            search_params: dict[str, Any] = {}
+            if keywords:
+                search_params["search_keywords"] = keywords
+            if sort_by:
+                search_params["sort_by"] = "Latest" if sort_by == "recent" else "Top match"
+            if date_posted:
+                search_params["date_posted"] = date_posted
+            if content_type:
+                search_params["content_type"] = content_type
+            if from_member_urns:
+                search_params["from_member"] = from_member_urns
+            if from_company_ids:
+                search_params["from_company"] = from_company_ids
+
+            all_posts: list[dict[str, Any]] = []
+            page = 0
+
+            while len(all_posts) < limit:
+                search_params["page"] = page
+
+                response = await client.post(
+                    f"{self.API_BASE}/search-posts",
+                    json=search_params,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    posts = data.get("data", [])
+                    if not posts:
+                        break
+
+                    for post in posts:
+                        all_posts.append(self._normalize_post(post))
+                        if len(all_posts) >= limit:
+                            break
+
+                    page += 1
+                elif response.status_code == 403:
+                    error_msg = response.json().get("message", "Access denied")
+                    raise PermissionError(f"Fresh Data API: {error_msg}")
+                else:
+                    logger.error("Post search failed", status=response.status_code)
+                    break
+
+            logger.info("Post search completed", count=len(all_posts))
+            return all_posts[:limit]
+
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.error("Post search error", error=str(e))
+            return []
+
+    def _normalize_post(self, data: dict) -> dict[str, Any]:
+        """Normalize post data to consistent format."""
+        return {
+            "urn": data.get("urn") or data.get("post_urn"),
+            "text": data.get("text") or data.get("commentary"),
+            "post_url": data.get("post_url") or data.get("url"),
+            "author": {
+                "name": data.get("poster_name") or data.get("author_name"),
+                "headline": data.get("poster_headline") or data.get("author_headline"),
+                "profile_url": data.get("poster_linkedin_url") or data.get("author_url"),
+                "profile_image": data.get("poster_image_url") or data.get("author_image"),
+            },
+            "engagement": {
+                "likes": data.get("num_likes", 0),
+                "comments": data.get("num_comments", 0),
+                "reposts": data.get("num_reposts", 0),
+            },
+            "media": {
+                "images": data.get("images", []),
+                "video": data.get("video"),
+                "document": data.get("document"),
+            },
+            "posted_at": data.get("time") or data.get("posted_at"),
+            "source": "fresh_data_api",
+        }
+
+    def _normalize_comment(self, data: dict) -> dict[str, Any]:
+        """Normalize comment data to consistent format."""
+        return {
+            "id": data.get("comment_id") or data.get("id"),
+            "text": data.get("text") or data.get("comment"),
+            "author": {
+                "name": data.get("commenter_name") or data.get("author_name"),
+                "headline": data.get("commenter_headline") or data.get("author_headline"),
+                "profile_url": data.get("commenter_linkedin_url") or data.get("author_url"),
+                "profile_image": data.get("commenter_image_url") or data.get("author_image"),
+            },
+            "engagement": {
+                "likes": data.get("num_likes", 0),
+                "replies": data.get("num_replies", 0),
+            },
+            "posted_at": data.get("time") or data.get("posted_at"),
+            "source": "fresh_data_api",
+        }
 
     # =========================================================================
     # Status Methods
@@ -727,21 +1041,18 @@ class FreshLinkedInDataClient:
             "api_host": self.API_HOST,
             "has_api_key": bool(self._api_key),
             "available_features": [
+                # Profile & Company
                 "get_profile",
                 "search_profiles",
                 "get_company",
                 "search_companies",
                 "get_company_employees",
-            ],
-            "future_features": [
-                # These endpoints are available in the API but not yet implemented
-                "get_user_posts",
-                "get_user_comments",
-                "get_user_reactions",
-                "get_post_details",
+                # Posts & Engagement
+                "get_profile_posts",
+                "get_company_posts",
                 "get_post_comments",
                 "get_post_reactions",
-                "get_post_reposts",
+                "search_posts",
             ],
             "documentation": "https://fdocs.info/api-reference/quickstart",
             "subscription": "https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2",

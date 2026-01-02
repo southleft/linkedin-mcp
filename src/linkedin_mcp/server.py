@@ -612,9 +612,6 @@ async def get_profile_posts(profile_id: str, limit: int = 10, use_cache: bool = 
     ctx = get_context()
     cache = get_cache()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     limit = min(limit, 50)  # Cap at 50
     cache_key = cache.make_key("posts", profile_id, str(limit))
 
@@ -624,9 +621,27 @@ async def get_profile_posts(profile_id: str, limit: int = 10, use_cache: bool = 
             if cached_data:
                 return {"success": True, "posts": cached_data, "count": len(cached_data), "cached": True}
 
-        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=limit)
-        await cache.set(cache_key, posts, CacheService.TTL_POSTS)
-        return {"success": True, "posts": posts, "count": len(posts), "cached": False}
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                linkedin_url = f"https://www.linkedin.com/in/{profile_id}/"
+                posts = await ctx.fresh_data_client.get_profile_posts(
+                    linkedin_url=linkedin_url,
+                    limit=limit,
+                )
+                if posts:
+                    await cache.set(cache_key, posts, CacheService.TTL_POSTS)
+                    return {"success": True, "posts": posts, "count": len(posts), "cached": False, "source": "fresh_data_api"}
+            except Exception as e:
+                logger.warning("Fresh Data API failed for posts, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if ctx.linkedin_client:
+            posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=limit)
+            await cache.set(cache_key, posts, CacheService.TTL_POSTS)
+            return {"success": True, "posts": posts, "count": len(posts), "cached": False, "source": "linkedin_api"}
+
+        return {"error": "No LinkedIn client available. Configure Fresh Data API key or session cookies."}
     except Exception as e:
         logger.error("Failed to fetch posts", error=str(e), profile_id=profile_id)
         return {"error": str(e)}
@@ -1328,12 +1343,29 @@ async def get_post_reactions(post_urn: str) -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     try:
-        reactions = await ctx.linkedin_client.get_post_reactions(post_urn)
-        return {"success": True, "reactions": reactions, "count": len(reactions)}
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                result = await ctx.fresh_data_client.get_post_reactions(post_urn)
+                if result:
+                    reactions = result.get("reactions", [])
+                    return {
+                        "success": True,
+                        "reactions": reactions,
+                        "count": len(reactions),
+                        "summary": result.get("summary", {}),
+                        "source": "fresh_data_api",
+                    }
+            except Exception as e:
+                logger.warning("Fresh Data API failed for reactions, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if ctx.linkedin_client:
+            reactions = await ctx.linkedin_client.get_post_reactions(post_urn)
+            return {"success": True, "reactions": reactions, "count": len(reactions), "source": "linkedin_api"}
+
+        return {"error": "No LinkedIn client available. Configure Fresh Data API key or session cookies."}
     except Exception as e:
         logger.error("Failed to fetch reactions", error=str(e), post_urn=post_urn)
         return {"error": str(e)}
@@ -1356,12 +1388,30 @@ async def get_post_comments(post_urn: str, limit: int = 50) -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     try:
-        comments = await ctx.linkedin_client.get_post_comments(post_urn, limit=limit)
-        return {"success": True, "comments": comments, "count": len(comments)}
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                comments = await ctx.fresh_data_client.get_post_comments(
+                    post_urn=post_urn,
+                    limit=limit,
+                )
+                if comments is not None:  # Empty list is valid
+                    return {
+                        "success": True,
+                        "comments": comments,
+                        "count": len(comments),
+                        "source": "fresh_data_api",
+                    }
+            except Exception as e:
+                logger.warning("Fresh Data API failed for comments, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if ctx.linkedin_client:
+            comments = await ctx.linkedin_client.get_post_comments(post_urn, limit=limit)
+            return {"success": True, "comments": comments, "count": len(comments), "source": "linkedin_api"}
+
+        return {"error": "No LinkedIn client available. Configure Fresh Data API key or session cookies."}
     except Exception as e:
         logger.error("Failed to fetch comments", error=str(e), post_urn=post_urn)
         return {"error": str(e)}
@@ -1556,14 +1606,33 @@ async def get_company_updates(public_id: str, limit: int = 10) -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     limit = min(limit, 50)
 
     try:
-        updates = await ctx.linkedin_client.get_company_updates(public_id, limit=limit)
-        return {"success": True, "updates": updates, "count": len(updates)}
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                linkedin_url = f"https://www.linkedin.com/company/{public_id}/"
+                updates = await ctx.fresh_data_client.get_company_posts(
+                    linkedin_url=linkedin_url,
+                    limit=limit,
+                )
+                if updates is not None:  # Empty list is valid
+                    return {
+                        "success": True,
+                        "updates": updates,
+                        "count": len(updates),
+                        "source": "fresh_data_api",
+                    }
+            except Exception as e:
+                logger.warning("Fresh Data API failed for company updates, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if ctx.linkedin_client:
+            updates = await ctx.linkedin_client.get_company_updates(public_id, limit=limit)
+            return {"success": True, "updates": updates, "count": len(updates), "source": "linkedin_api"}
+
+        return {"error": "No LinkedIn client available. Configure Fresh Data API key or session cookies."}
     except Exception as e:
         logger.error("Failed to fetch company updates", error=str(e), public_id=public_id)
         return {"error": str(e)}
@@ -1745,13 +1814,33 @@ async def analyze_engagement(post_urn: str, follower_count: int | None = None) -
     ctx = get_context()
     analyzer = get_engagement_analyzer()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     try:
-        # Fetch engagement data
-        reactions = await ctx.linkedin_client.get_post_reactions(post_urn)
-        comments = await ctx.linkedin_client.get_post_comments(post_urn)
+        reactions = []
+        comments = []
+        source = None
+
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                # Get reactions
+                reactions_result = await ctx.fresh_data_client.get_post_reactions(post_urn)
+                if reactions_result:
+                    reactions = reactions_result.get("reactions", [])
+                    source = "fresh_data_api"
+
+                # Get comments
+                comments = await ctx.fresh_data_client.get_post_comments(post_urn) or []
+            except Exception as e:
+                logger.warning("Fresh Data API failed for engagement analysis, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client if needed
+        if not source and ctx.linkedin_client:
+            reactions = await ctx.linkedin_client.get_post_reactions(post_urn)
+            comments = await ctx.linkedin_client.get_post_comments(post_urn)
+            source = "linkedin_api"
+
+        if not source:
+            return {"error": "No LinkedIn client available. Configure Fresh Data API key or session cookies."}
 
         # Analyze engagement rate
         engagement_metrics = analyzer.calculate_engagement_rate(
@@ -1771,6 +1860,7 @@ async def analyze_engagement(post_urn: str, follower_count: int | None = None) -
             "engagement": engagement_metrics,
             "reactions": reaction_analysis,
             "comments_count": len(comments),
+            "source": source,
         }
     except Exception as e:
         logger.error("Failed to analyze engagement", error=str(e), post_urn=post_urn)
@@ -1796,13 +1886,29 @@ async def analyze_content_performance(profile_id: str, post_limit: int = 20) -> 
     ctx = get_context()
     analyzer = get_content_analyzer()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     post_limit = min(post_limit, 50)
 
     try:
-        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+        posts = None
+        source = None
+
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                linkedin_url = f"https://www.linkedin.com/in/{profile_id}/"
+                posts = await ctx.fresh_data_client.get_profile_posts(
+                    linkedin_url=linkedin_url,
+                    limit=post_limit,
+                )
+                if posts:
+                    source = "fresh_data_api"
+            except Exception as e:
+                logger.warning("Fresh Data API failed for content analysis, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if not posts and ctx.linkedin_client:
+            posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+            source = "linkedin_api"
 
         if not posts:
             return {"success": True, "message": "No posts found for analysis"}
@@ -1813,6 +1919,7 @@ async def analyze_content_performance(profile_id: str, post_limit: int = 20) -> 
             "success": True,
             "profile_id": profile_id,
             "analysis": analysis,
+            "source": source,
         }
     except Exception as e:
         logger.error("Failed to analyze content", error=str(e), profile_id=profile_id)
@@ -1838,13 +1945,29 @@ async def analyze_optimal_posting_times(profile_id: str, post_limit: int = 30) -
     ctx = get_context()
     analyzer = get_posting_time_analyzer()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     post_limit = min(post_limit, 50)
 
     try:
-        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+        posts = None
+        source = None
+
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                linkedin_url = f"https://www.linkedin.com/in/{profile_id}/"
+                posts = await ctx.fresh_data_client.get_profile_posts(
+                    linkedin_url=linkedin_url,
+                    limit=post_limit,
+                )
+                if posts:
+                    source = "fresh_data_api"
+            except Exception as e:
+                logger.warning("Fresh Data API failed for posting time analysis, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if not posts and ctx.linkedin_client:
+            posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+            source = "linkedin_api"
 
         if not posts:
             return {"success": True, "message": "No posts found for analysis"}
@@ -1855,6 +1978,7 @@ async def analyze_optimal_posting_times(profile_id: str, post_limit: int = 30) -
             "success": True,
             "profile_id": profile_id,
             "posting_analysis": analysis,
+            "source": source,
         }
     except Exception as e:
         logger.error("Failed to analyze posting times", error=str(e), profile_id=profile_id)
@@ -1879,11 +2003,23 @@ async def analyze_post_audience(post_urn: str) -> dict:
     ctx = get_context()
     analyzer = get_audience_analyzer()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     try:
-        comments = await ctx.linkedin_client.get_post_comments(post_urn)
+        comments = None
+        source = None
+
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                comments = await ctx.fresh_data_client.get_post_comments(post_urn)
+                if comments is not None:
+                    source = "fresh_data_api"
+            except Exception as e:
+                logger.warning("Fresh Data API failed for audience analysis, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if comments is None and ctx.linkedin_client:
+            comments = await ctx.linkedin_client.get_post_comments(post_urn)
+            source = "linkedin_api"
 
         if not comments:
             return {"success": True, "message": "No comments to analyze"}
@@ -1894,6 +2030,7 @@ async def analyze_post_audience(post_urn: str) -> dict:
             "success": True,
             "post_urn": post_urn,
             "audience_analysis": analysis,
+            "source": source,
         }
     except Exception as e:
         logger.error("Failed to analyze audience", error=str(e), post_urn=post_urn)
@@ -1921,13 +2058,29 @@ async def analyze_hashtag_performance(profile_id: str, post_limit: int = 30) -> 
     ctx = get_context()
     analyzer = get_content_analyzer()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     post_limit = min(post_limit, 50)
 
     try:
-        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+        posts = None
+        source = None
+
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                linkedin_url = f"https://www.linkedin.com/in/{profile_id}/"
+                posts = await ctx.fresh_data_client.get_profile_posts(
+                    linkedin_url=linkedin_url,
+                    limit=post_limit,
+                )
+                if posts:
+                    source = "fresh_data_api"
+            except Exception as e:
+                logger.warning("Fresh Data API failed for hashtag analysis, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if not posts and ctx.linkedin_client:
+            posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+            source = "linkedin_api"
 
         if not posts:
             return {"success": True, "message": "No posts found for analysis"}
@@ -1998,6 +2151,7 @@ async def analyze_hashtag_performance(profile_id: str, post_limit: int = 30) -> 
                 ).most_common(20)),
             },
             "recommendations": recommendations,
+            "source": source,
         }
     except Exception as e:
         logger.error("Failed to analyze hashtags", error=str(e), profile_id=profile_id)
@@ -2029,15 +2183,35 @@ async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> d
     content_analyzer = get_content_analyzer()
     posting_analyzer = get_posting_time_analyzer()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     post_limit = min(post_limit, 50)
 
     try:
-        # Fetch data
-        profile = await ctx.linkedin_client.get_profile(profile_id)
-        posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+        profile = None
+        posts = None
+        source = None
+
+        # Try Fresh Data API first (most reliable)
+        if ctx.fresh_data_client:
+            try:
+                linkedin_url = f"https://www.linkedin.com/in/{profile_id}/"
+                profile = await ctx.fresh_data_client.get_profile(linkedin_url=linkedin_url)
+                posts = await ctx.fresh_data_client.get_profile_posts(
+                    linkedin_url=linkedin_url,
+                    limit=post_limit,
+                )
+                if profile and posts:
+                    source = "fresh_data_api"
+            except Exception as e:
+                logger.warning("Fresh Data API failed for engagement report, trying fallback", error=str(e))
+
+        # Fall back to linkedin_client
+        if not profile and ctx.linkedin_client:
+            profile = await ctx.linkedin_client.get_profile(profile_id)
+            posts = await ctx.linkedin_client.get_profile_posts(profile_id, limit=post_limit)
+            source = "linkedin_api"
+
+        if not profile:
+            return {"error": "No LinkedIn client available. Configure Fresh Data API key or session cookies."}
 
         if not posts:
             return {"success": True, "message": "No posts found for report"}
@@ -2088,6 +2262,7 @@ async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> d
                 "recommendations": content_analysis.get("recommendations", [])
                 + timing_analysis.get("recommended_posting_times", []),
             },
+            "source": source,
         }
     except Exception as e:
         logger.error("Failed to generate report", error=str(e), profile_id=profile_id)
