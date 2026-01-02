@@ -650,6 +650,41 @@ class LinkedInPostsClient:
                     "error": "LinkedIn does not allow images in top-level comments. Images are only supported in nested comment replies.",
                     "status_code": 403,
                 }
+            elif response.status_code == 403:
+                error_text = response.text[:500]
+                # Check for the specific permission error
+                if "partnerApiSocialActions" in error_text or "PERMISSION" in error_text.upper():
+                    logger.warning(
+                        "Comment permission denied - requires Community Management API",
+                        status=response.status_code,
+                        post_urn=post_urn,
+                    )
+                    return {
+                        "success": False,
+                        "error": "Commenting requires the 'Community Management API' product, not just 'Share on LinkedIn'.",
+                        "details": (
+                            "The 'Share on LinkedIn' product only allows creating posts. "
+                            "To comment on posts, you need to:\n"
+                            "1. Go to LinkedIn Developer Portal → Your App → Products\n"
+                            "2. Request access to 'Community Management API'\n"
+                            "3. LinkedIn will review your application (may take days/weeks)\n"
+                            "4. Once approved, commenting will work automatically"
+                        ),
+                        "status_code": 403,
+                        "permission_required": "Community Management API",
+                    }
+                else:
+                    logger.error(
+                        "Failed to create comment - 403 Forbidden",
+                        status=response.status_code,
+                        error=error_text,
+                        post_urn=post_urn,
+                    )
+                    return {
+                        "success": False,
+                        "error": error_text,
+                        "status_code": 403,
+                    }
             else:
                 error_text = response.text[:500]
                 logger.error(

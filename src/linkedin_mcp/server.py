@@ -994,6 +994,11 @@ async def create_comment(
 
     Note: LinkedIn only allows images in nested comments (replies to other comments),
     not in top-level comments directly on posts.
+
+    Note: Commenting requires the "Community Management API" product from LinkedIn,
+    which has a separate approval process. The "Share on LinkedIn" product only
+    allows creating posts, not comments. If you receive a permission error,
+    you'll need to apply for Community Management API access in your Developer Portal.
     """
     import base64
     import tempfile
