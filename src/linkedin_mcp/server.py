@@ -193,14 +193,26 @@ async def get_profile(
     cache = get_cache()
     browser = get_browser_automation()
 
-    if not ctx.linkedin_client:
+    # Check if ANY data source is available
+    # Fresh Data API is the most reliable (paid RapidAPI)
+    # linkedin_client is secondary (has bot detection issues)
+    # browser is tertiary (reliable but slow)
+    has_fresh_data = ctx.fresh_data_client is not None
+    has_linkedin_client = ctx.linkedin_client is not None
+    has_browser = browser and browser.is_available
+
+    if not has_fresh_data and not has_linkedin_client and not has_browser:
         return {
-            "error": "LinkedIn client not initialized",
-            "reason": "No valid LinkedIn session cookies found.",
-            "fix": "Run: linkedin-mcp-auth extract-cookies --browser chrome",
+            "error": "No data sources available",
+            "reason": "Neither Fresh Data API, LinkedIn session, nor browser automation is configured.",
+            "fix_options": [
+                "Set THIRDPARTY_RAPIDAPI_KEY for reliable Fresh Data API access (recommended)",
+                "Run: linkedin-mcp-auth extract-cookies --browser chrome",
+                "Install browser: playwright install chromium",
+            ],
             "note": (
-                "The LinkedIn MCP requires authentication via browser cookies. "
-                "Make sure you're logged into LinkedIn in Chrome, then run the command above."
+                "The Fresh Data API (RapidAPI) is the most reliable source. "
+                "Get your API key at: https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2"
             ),
         }
 
@@ -222,10 +234,9 @@ async def get_profile(
                 return {"success": True, "profile": cached_data, "cached": True}
 
         # Use Profile Enrichment Engine for comprehensive data
-        # Pass browser automation for DOM scraping (most reliable source)
-        # Pass fresh_data_client for RapidAPI (most reliable paid source)
+        # Pass all available sources - engine handles None gracefully
         engine = ProfileEnrichmentEngine(
-            ctx.linkedin_client,
+            ctx.linkedin_client,  # Can be None - engine handles it
             browser,
             fresh_data_client=ctx.fresh_data_client,
         )
@@ -245,6 +256,8 @@ async def get_profile(
             enriched_profile.get("firstName")
             or enriched_profile.get("lastName")
             or enriched_profile.get("headline")
+            or enriched_profile.get("summary")
+            or enriched_profile.get("currentCompany")
             or len(sources_successful) > 1
         )
 
@@ -256,26 +269,33 @@ async def get_profile(
             }
         else:
             # Provide guidance for limited data scenarios
-            # LinkedIn's aggressive bot detection often blocks API access
-            browser_available = browser and browser.is_available
+            suggestions = []
+            if not has_fresh_data:
+                suggestions.append(
+                    "Subscribe to Fresh Data API for reliable profile data: "
+                    "https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2"
+                )
+            if not has_linkedin_client:
+                suggestions.append(
+                    "Re-authenticate: Run 'linkedin-mcp-auth extract-cookies --browser chrome'"
+                )
+            if not has_browser:
+                suggestions.append(
+                    "Install Playwright: Run 'playwright install chromium' for browser fallback"
+                )
+
             return {
                 "success": True,
                 "profile": enriched_profile,
                 "cached": False,
                 "data_limited": True,
                 "reason": (
-                    "LinkedIn has blocked API access due to bot detection. "
-                    "This is common behavior from LinkedIn's security systems."
+                    "Profile data is limited. LinkedIn's bot detection may have blocked some sources. "
+                    "Fresh Data API (RapidAPI) is the most reliable source for profile data."
                 ),
                 "what_worked": sources_successful,
                 "profile_url": f"https://www.linkedin.com/in/{profile_id}/",
-                "suggestions": [
-                    "Re-authenticate: Run 'linkedin-mcp-auth extract-cookies --browser chrome' to refresh cookies",
-                    "Use Official API: For your own profile, use get_my_profile() which uses OAuth",
-                    "Install Playwright: Run 'playwright install chromium' to enable browser automation",
-                ] + ([
-                    "Browser automation is available but LinkedIn may still block access",
-                ] if browser_available else []),
+                "suggestions": suggestions,
             }
 
     except Exception as e:
@@ -292,6 +312,9 @@ async def get_profile(
         elif "timeout" in error_str:
             reason = "LinkedIn request timed out. Their servers may be slow or blocking requests."
             fix = "Try again in a few minutes, or refresh cookies."
+        elif "not subscribed" in error_str or "403" in error_str:
+            reason = "Fresh Data API subscription issue."
+            fix = "Verify your RapidAPI subscription at: https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2"
         else:
             reason = "Unexpected error occurred during profile fetch."
             fix = "Check logs for details and try refreshing cookies."

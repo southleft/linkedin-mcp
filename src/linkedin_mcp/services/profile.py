@@ -145,6 +145,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_primary_profile(self, public_id: str) -> dict[str, Any] | None:
         """Fetch primary profile data."""
+        if not self._client:
+            return None
         try:
             return await self._client.get_profile(public_id)
         except Exception as e:
@@ -163,6 +165,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_contact_info(self, public_id: str) -> dict[str, Any] | None:
         """Fetch contact information."""
+        if not self._client:
+            return None
         try:
             return await self._client.get_profile_contact_info(public_id)
         except Exception as e:
@@ -171,6 +175,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_skills(self, public_id: str) -> list[dict[str, Any]] | None:
         """Fetch skills and endorsements."""
+        if not self._client:
+            return None
         try:
             return await self._client.get_profile_skills(public_id)
         except Exception as e:
@@ -179,6 +185,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_network_info(self, public_id: str) -> dict[str, Any] | None:
         """Fetch network information (connections, followers, distance)."""
+        if not self._client:
+            return None
         try:
             return await self._client.get_profile_network_info(public_id)
         except Exception as e:
@@ -187,6 +195,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_badges(self, public_id: str) -> dict[str, Any] | None:
         """Fetch member badges (Premium, Creator, etc.)."""
+        if not self._client:
+            return None
         try:
             return await self._client.get_profile_member_badges(public_id)
         except Exception as e:
@@ -195,6 +205,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_activity(self, public_id: str) -> list[dict[str, Any]] | None:
         """Fetch recent activity updates."""
+        if not self._client:
+            return None
         try:
             return await self._client.get_profile_updates(public_id, limit=5)
         except Exception as e:
@@ -203,6 +215,8 @@ class ProfileEnrichmentEngine:
 
     async def _fetch_from_search(self, public_id: str) -> dict[str, Any] | None:
         """Search for profile to get basic info (name, headline, photo)."""
+        if not self._client:
+            return None
         try:
             results = await self._client.search_people(keywords=public_id, limit=10)
             # Find exact match
@@ -260,42 +274,32 @@ class ProfileEnrichmentEngine:
         Merge results from all sources into a unified profile.
 
         Priority order for conflicts (highest priority first):
-        1. Browser scraping (most reliable real data)
-        2. Primary profile API
-        3. Search results
-        4. Other API sources
+        1. Fresh Data API (most reliable paid source - RECOMMENDED)
+        2. Browser scraping (reliable real data when API fails)
+        3. Primary profile API (linkedin-api - may be blocked)
+        4. Search results
+        5. Web search (public data)
         """
         profile: dict[str, Any] = {
             "public_id": public_id,
         }
 
-        # Start with primary profile if available
-        primary = sources.get("profile")
-        if primary and isinstance(primary, dict):
-            profile.update(primary)
-
-        # Fresh Data API is HIGH PRIORITY - comprehensive data from RapidAPI
-        # Maps Fresh Data API field names to our standard names
+        # Fresh Data API is HIGHEST PRIORITY - reliable paid source (RapidAPI)
+        # Start with Fresh Data API data as the base (most reliable)
         fresh_data = sources.get("fresh_data")
         if fresh_data and isinstance(fresh_data, dict):
-            # Fresh Data API uses different field names
-            if not profile.get("firstName") and fresh_data.get("first_name"):
-                profile["firstName"] = fresh_data.get("first_name")
-            if not profile.get("lastName") and fresh_data.get("last_name"):
-                profile["lastName"] = fresh_data.get("last_name")
-            if not profile.get("headline") and fresh_data.get("headline"):
-                profile["headline"] = fresh_data.get("headline")
-            if not profile.get("summary") and fresh_data.get("about"):
-                profile["summary"] = fresh_data.get("about")
-            if not profile.get("locationName") and fresh_data.get("city"):
-                profile["locationName"] = fresh_data.get("city")
-            if not profile.get("profilePicture") and fresh_data.get("profile_image_url"):
-                profile["profilePicture"] = fresh_data.get("profile_image_url")
-            if not profile.get("currentCompany") and fresh_data.get("company"):
-                profile["currentCompany"] = fresh_data.get("company")
-            if not profile.get("industry") and fresh_data.get("company_industry"):
-                profile["industry"] = fresh_data.get("company_industry")
-            # Store raw fresh_data for reference if it has rich data
+            # Fresh Data API uses different field names - map to standard
+            profile["firstName"] = fresh_data.get("first_name", "")
+            profile["lastName"] = fresh_data.get("last_name", "")
+            profile["headline"] = fresh_data.get("headline", "")
+            profile["summary"] = fresh_data.get("about", "")
+            profile["locationName"] = fresh_data.get("city", "")
+            profile["profilePicture"] = fresh_data.get("profile_image_url", "")
+            profile["currentCompany"] = fresh_data.get("company", "")
+            profile["industry"] = fresh_data.get("company_industry", "")
+            profile["follower_count"] = fresh_data.get("follower_count")
+            profile["connection_count"] = fresh_data.get("connection_count")
+            # Store rich data (experiences, education, etc.)
             if fresh_data.get("experiences") or fresh_data.get("educations"):
                 profile["_fresh_data"] = {
                     "experiences": fresh_data.get("experiences", []),
@@ -303,6 +307,26 @@ class ProfileEnrichmentEngine:
                     "languages": fresh_data.get("languages", []),
                     "certifications": fresh_data.get("certifications", []),
                 }
+            logger.debug("Fresh Data API provided profile base", public_id=public_id)
+
+        # Primary profile API fills in gaps (linkedin-api - may be blocked by bot detection)
+        primary = sources.get("profile")
+        if primary and isinstance(primary, dict):
+            # Only fill in fields that Fresh Data didn't provide
+            if not profile.get("firstName"):
+                profile["firstName"] = primary.get("firstName", "")
+            if not profile.get("lastName"):
+                profile["lastName"] = primary.get("lastName", "")
+            if not profile.get("headline"):
+                profile["headline"] = primary.get("headline", "")
+            if not profile.get("summary"):
+                profile["summary"] = primary.get("summary", "")
+            if not profile.get("locationName"):
+                profile["locationName"] = primary.get("locationName", "")
+            if not profile.get("profilePicture"):
+                profile["profilePicture"] = primary.get("displayPictureUrl", "")
+            if not profile.get("industry"):
+                profile["industry"] = primary.get("industryName", "")
 
         # Merge search results for missing basic info
         # Search uses different field names: name, jobtitle, location
