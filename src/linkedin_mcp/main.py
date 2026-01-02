@@ -2,62 +2,25 @@
 LinkedIn MCP Server entry point.
 
 Starts the MCP server with the configured transport.
+FastMCP handles lifespan management automatically via the lifespan parameter in server.py.
 """
 
-import asyncio
 import sys
 
-from linkedin_mcp.config.settings import get_settings
-from linkedin_mcp.core.lifespan import lifespan
-from linkedin_mcp.core.logging import configure_logging, get_logger
 from linkedin_mcp.server import mcp
 
 
-async def run_server() -> None:
-    """Run the MCP server with lifespan management."""
-    settings = get_settings()
-    configure_logging(settings.logging)
-    logger = get_logger(__name__)
-
-    logger.info(
-        "Starting LinkedIn MCP Server",
-        name=settings.server.name,
-        version=settings.server.version,
-        transport=settings.server.transport,
-    )
-
-    async with lifespan() as ctx:
-        logger.info(
-            "Server ready",
-            linkedin=ctx.has_linkedin_client,
-            database=ctx.has_database,
-            scheduler=ctx.has_scheduler,
-        )
-
-        # Run the MCP server based on transport
-        # CRITICAL: For stdio transport, show_banner=False prevents stdout pollution
-        # stdout MUST be reserved for JSON-RPC protocol messages only
-        if settings.server.transport == "stdio":
-            await mcp.run_stdio_async(show_banner=False)
-        elif settings.server.transport == "streamable-http":
-            await mcp.run_uvicorn_async(
-                host=settings.server.host,
-                port=settings.server.port,
-            )
-        elif settings.server.transport == "sse":
-            await mcp.run_sse_async(
-                host=settings.server.host,
-                port=settings.server.port,
-            )
-        else:
-            logger.error("Unknown transport", transport=settings.server.transport)
-            sys.exit(1)
-
-
 def main() -> None:
-    """Main entry point for the LinkedIn MCP Server."""
+    """Main entry point for the LinkedIn MCP Server.
+
+    FastMCP handles all lifecycle management including:
+    - Lifespan context (initialization/shutdown)
+    - Transport selection (stdio by default)
+    - Signal handling
+    """
     try:
-        asyncio.run(run_server())
+        # mcp.run() handles everything - lifespan is registered in server.py
+        mcp.run()
     except KeyboardInterrupt:
         print("\nServer stopped by user", file=sys.stderr)
         sys.exit(0)
