@@ -526,6 +526,7 @@ class LinkedInPostsClient:
         post_urn: str,
         text: str,
         parent_comment_urn: Optional[str] = None,
+        image_path: Optional[Path] = None,
     ) -> dict[str, Any]:
         """
         Create a comment on a post or reply to an existing comment.
@@ -534,9 +535,14 @@ class LinkedInPostsClient:
             post_urn: The URN of the post to comment on (e.g., "urn:li:share:123" or "urn:li:activity:123")
             text: The comment text content
             parent_comment_urn: Optional URN of parent comment for nested replies
+            image_path: Optional path to image file (only supported for nested comments/replies)
 
         Returns:
             Result dict with success status and comment details
+
+        Note:
+            LinkedIn only allows images in nested comments (replies to other comments),
+            not in top-level comments directly on posts.
         """
         try:
             # Normalize post URN - handle both share and activity formats
@@ -552,6 +558,36 @@ class LinkedInPostsClient:
             else:
                 # Try to use as-is
                 activity_urn = post_urn
+
+            # Handle image upload if provided
+            image_urn = None
+            if image_path:
+                if not parent_comment_urn:
+                    logger.warning(
+                        "Image provided for top-level comment - LinkedIn only supports images in nested comments"
+                    )
+                    return {
+                        "success": False,
+                        "error": "LinkedIn only allows images in nested comments (replies to other comments). "
+                        "To add an image, you must reply to an existing comment using parent_comment_urn.",
+                    }
+
+                # Upload the image
+                logger.info("Uploading image for comment", image_path=str(image_path))
+                upload_data = self._initialize_upload(MediaType.IMAGE)
+                if not upload_data:
+                    return {"success": False, "error": "Failed to initialize image upload for comment"}
+
+                upload_url = upload_data.get("uploadUrl")
+                image_urn = upload_data.get("image")
+
+                if not upload_url or not image_urn:
+                    return {"success": False, "error": "Invalid upload response for comment image"}
+
+                if not self._upload_media(upload_url, image_path):
+                    return {"success": False, "error": "Failed to upload comment image"}
+
+                logger.info("Uploaded comment image", image_urn=image_urn)
 
             # Build the endpoint URL
             encoded_urn = requests.utils.quote(activity_urn, safe="")
@@ -570,11 +606,16 @@ class LinkedInPostsClient:
             if parent_comment_urn:
                 payload["parentComment"] = parent_comment_urn
 
+            # Add image content if uploaded
+            if image_urn:
+                payload["content"] = [{"entity": {"image": image_urn}}]
+
             logger.info(
                 "Creating comment",
                 post_urn=post_urn,
                 activity_urn=activity_urn,
                 has_parent=bool(parent_comment_urn),
+                has_image=bool(image_urn),
             )
 
             response = self._session.post(
@@ -586,18 +627,28 @@ class LinkedInPostsClient:
             if response.status_code == 201:
                 comment_id = response.headers.get("x-restli-id", "")
                 logger.info("Created comment", comment_id=comment_id, post_urn=post_urn)
-                return {
+                result = {
                     "success": True,
                     "comment_id": comment_id,
                     "post_urn": post_urn,
                     "text": text[:100] + "..." if len(text) > 100 else text,
                 }
+                if image_urn:
+                    result["image_urn"] = image_urn
+                return result
             elif response.status_code == 429:
                 logger.warning("Comment rate limited", post_urn=post_urn)
                 return {
                     "success": False,
                     "error": "Rate limited. LinkedIn limits comment frequency. Please wait a moment and try again.",
                     "status_code": 429,
+                }
+            elif response.status_code == 403 and image_urn and not parent_comment_urn:
+                # This shouldn't happen due to our check above, but handle it anyway
+                return {
+                    "success": False,
+                    "error": "LinkedIn does not allow images in top-level comments. Images are only supported in nested comment replies.",
+                    "status_code": 403,
                 }
             else:
                 error_text = response.text[:500]

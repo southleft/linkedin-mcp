@@ -970,7 +970,12 @@ async def delete_post(post_urn: str) -> dict:
 
 
 @mcp.tool()
-async def create_comment(post_urn: str, text: str, parent_comment_urn: str | None = None) -> dict:
+async def create_comment(
+    post_urn: str,
+    text: str,
+    parent_comment_urn: str | None = None,
+    image_path: str | None = None,
+) -> dict:
     """
     Create a comment on a LinkedIn post using the Official API.
 
@@ -980,9 +985,23 @@ async def create_comment(post_urn: str, text: str, parent_comment_urn: str | Non
         post_urn: The URN of the post to comment on (e.g., "urn:li:share:123456" or "urn:li:activity:123456")
         text: The comment text content (max 1250 characters)
         parent_comment_urn: Optional URN of parent comment for nested replies
+        image_path: Optional image source (only for nested replies) - can be:
+            - Absolute path to local file (JPG, PNG, GIF)
+            - URL to image (http:// or https://)
+            - Base64-encoded image (data:image/png;base64,...)
 
     Returns the created comment details including comment ID.
+
+    Note: LinkedIn only allows images in nested comments (replies to other comments),
+    not in top-level comments directly on posts.
     """
+    import base64
+    import tempfile
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    import httpx
+
     from linkedin_mcp.core.context import get_context
     from linkedin_mcp.core.logging import get_logger
     from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
@@ -1002,7 +1021,84 @@ async def create_comment(post_urn: str, text: str, parent_comment_urn: str | Non
     if len(text) > 1250:
         return {"error": f"Comment text too long ({len(text)} chars). Maximum is 1250 characters."}
 
+    # Check image constraint early
+    if image_path and not parent_comment_urn:
+        return {
+            "error": "LinkedIn only allows images in nested comments (replies to other comments). "
+            "To add an image, you must provide parent_comment_urn to reply to an existing comment.",
+            "hint": "First create a text comment, then use the returned comment_id as parent_comment_urn for an image reply.",
+        }
+
+    valid_extensions = (".jpg", ".jpeg", ".png", ".gif")
+    temp_file = None
+    image_file = None
+
     try:
+        # Handle image if provided
+        if image_path:
+            if image_path.startswith(("http://", "https://")):
+                # URL input - download to temp file
+                logger.info("Downloading comment image from URL", url=image_path[:100])
+                try:
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                        response = await client.get(image_path)
+                        response.raise_for_status()
+
+                        content_type = response.headers.get("content-type", "").lower()
+                        if "jpeg" in content_type or "jpg" in content_type:
+                            ext = ".jpg"
+                        elif "png" in content_type:
+                            ext = ".png"
+                        elif "gif" in content_type:
+                            ext = ".gif"
+                        else:
+                            parsed = urlparse(image_path)
+                            path_ext = Path(parsed.path).suffix.lower()
+                            ext = path_ext if path_ext in valid_extensions else ".jpg"
+
+                        temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                        temp_file.write(response.content)
+                        temp_file.close()
+                        image_file = Path(temp_file.name)
+
+                except httpx.HTTPStatusError as e:
+                    return {"error": f"Failed to download image: HTTP {e.response.status_code}"}
+                except httpx.RequestError as e:
+                    return {"error": f"Failed to download image: {str(e)}"}
+
+            elif image_path.startswith("data:image/"):
+                # Base64-encoded image
+                logger.info("Decoding base64 comment image")
+                try:
+                    header, encoded = image_path.split(",", 1)
+                    mime_part = header.split(";")[0]
+                    image_format = mime_part.split("/")[1] if "/" in mime_part else "png"
+
+                    ext_map = {"jpeg": ".jpg", "jpg": ".jpg", "png": ".png", "gif": ".gif"}
+                    ext = ext_map.get(image_format.lower(), ".png")
+
+                    image_data = base64.b64decode(encoded)
+                    temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                    temp_file.write(image_data)
+                    temp_file.close()
+                    image_file = Path(temp_file.name)
+
+                except (ValueError, base64.binascii.Error) as e:
+                    return {"error": f"Invalid base64 image data: {str(e)}"}
+
+            else:
+                # Local file path
+                image_file = Path(image_path)
+                if not image_file.exists():
+                    return {
+                        "error": f"Image file not found: {image_path}",
+                        "hint": "You can also provide a URL (http/https) or base64-encoded image (data:image/...)",
+                    }
+
+            # Validate extension
+            if not image_file.suffix.lower() in valid_extensions:
+                return {"error": f"Invalid image format. Supported: {', '.join(valid_extensions)}"}
+
         posts_client = LinkedInPostsClient(
             access_token=ctx.official_client._access_token,
         )
@@ -1010,6 +1106,7 @@ async def create_comment(post_urn: str, text: str, parent_comment_urn: str | Non
             post_urn=post_urn,
             text=text,
             parent_comment_urn=parent_comment_urn,
+            image_path=image_file,
         )
 
         if result and result.get("success"):
@@ -1021,6 +1118,15 @@ async def create_comment(post_urn: str, text: str, parent_comment_urn: str | Non
     except Exception as e:
         logger.error("Failed to create comment", error=str(e), post_urn=post_urn)
         return {"error": str(e)}
+
+    finally:
+        # Clean up temp file if we created one
+        if temp_file is not None:
+            import os
+            try:
+                os.unlink(temp_file.name)
+            except OSError:
+                pass
 
 
 @mcp.tool()
