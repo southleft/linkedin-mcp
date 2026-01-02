@@ -521,6 +521,102 @@ class LinkedInPostsClient:
             logger.error("Error getting post", error=str(e))
             return None
 
+    def create_comment(
+        self,
+        post_urn: str,
+        text: str,
+        parent_comment_urn: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Create a comment on a post or reply to an existing comment.
+
+        Args:
+            post_urn: The URN of the post to comment on (e.g., "urn:li:share:123" or "urn:li:activity:123")
+            text: The comment text content
+            parent_comment_urn: Optional URN of parent comment for nested replies
+
+        Returns:
+            Result dict with success status and comment details
+        """
+        try:
+            # Normalize post URN - handle both share and activity formats
+            # The API expects urn:li:activity format for the socialActions endpoint
+            if post_urn.startswith("urn:li:share:"):
+                # Convert share URN to activity URN format
+                share_id = post_urn.split(":")[-1]
+                activity_urn = f"urn:li:activity:{share_id}"
+            elif post_urn.startswith("urn:li:activity:"):
+                activity_urn = post_urn
+            elif post_urn.startswith("urn:li:ugcPost:"):
+                activity_urn = post_urn
+            else:
+                # Try to use as-is
+                activity_urn = post_urn
+
+            # Build the endpoint URL
+            encoded_urn = requests.utils.quote(activity_urn, safe="")
+            endpoint = f"{self.API_BASE}/rest/socialActions/{encoded_urn}/comments"
+
+            # Build the request payload
+            payload = {
+                "actor": self.member_urn,
+                "object": activity_urn,
+                "message": {
+                    "text": text[:1250] if text else "",  # LinkedIn comment limit
+                },
+            }
+
+            # Add parent comment for nested replies
+            if parent_comment_urn:
+                payload["parentComment"] = parent_comment_urn
+
+            logger.info(
+                "Creating comment",
+                post_urn=post_urn,
+                activity_urn=activity_urn,
+                has_parent=bool(parent_comment_urn),
+            )
+
+            response = self._session.post(
+                endpoint,
+                headers=self._get_headers(),
+                json=payload,
+            )
+
+            if response.status_code == 201:
+                comment_id = response.headers.get("x-restli-id", "")
+                logger.info("Created comment", comment_id=comment_id, post_urn=post_urn)
+                return {
+                    "success": True,
+                    "comment_id": comment_id,
+                    "post_urn": post_urn,
+                    "text": text[:100] + "..." if len(text) > 100 else text,
+                }
+            elif response.status_code == 429:
+                logger.warning("Comment rate limited", post_urn=post_urn)
+                return {
+                    "success": False,
+                    "error": "Rate limited. LinkedIn limits comment frequency. Please wait a moment and try again.",
+                    "status_code": 429,
+                }
+            else:
+                error_text = response.text[:500]
+                logger.error(
+                    "Failed to create comment",
+                    status=response.status_code,
+                    error=error_text,
+                    post_urn=post_urn,
+                )
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error creating comment", error=str(e), post_urn=post_urn)
+            return {"success": False, "error": str(e)}
+
     def debug_context(self) -> dict[str, Any]:
         """
         Get debug information about the Posts client.
@@ -536,6 +632,7 @@ class LinkedInPostsClient:
                 "create_text_post",
                 "create_image_post",
                 "create_poll",
+                "create_comment",
                 "delete_post",
                 "get_post",
             ],
