@@ -549,22 +549,30 @@ async def init_data_provider(
     primary_client: Any | None = None,
     marketing_client: Any | None = None,
     fresh_data_client: Any | None = None,
+    pnd_client: Any | None = None,
 ) -> Any:
     """
     Initialize the LinkedIn data provider with automatic fallback.
 
-    The data provider orchestrates between multiple data sources:
-    1. Primary: tomquirk/linkedin-api (fastest, most features)
-    2. Marketing API: LinkedIn Official Community Management API (organizations)
-    3. Fresh Data API: RapidAPI Fresh LinkedIn Profile Data (search)
+    The data provider orchestrates between multiple data sources,
+    ordered by RELIABILITY (most reliable first):
+    1. PND API: Professional Network Data (RapidAPI) - MOST RELIABLE
+    2. Fresh Data API: RapidAPI Fresh LinkedIn Profile Data (search)
+    3. Marketing API: LinkedIn Official Community Management API (organizations)
     4. Enhanced: HTTP client with curl_cffi (anti-detection)
-    5. Headless: Browser scraper (most reliable, slowest)
+    5. Headless: Browser scraper (slowest but reliable)
+    6. Primary: tomquirk/linkedin-api (LEAST RELIABLE - cookie-based)
+
+    The unofficial LinkedIn API (Primary) is placed LAST because it's the
+    most brittle - it relies on session cookies that expire and is prone
+    to bot detection.
 
     Args:
         settings: Application settings
-        primary_client: Optional pre-initialized linkedin-api client
+        primary_client: Optional pre-initialized linkedin-api client (LEAST reliable)
         marketing_client: Optional Marketing API client (Community Management)
         fresh_data_client: Optional Fresh LinkedIn Data API client (RapidAPI)
+        pnd_client: Optional Professional Network Data API client (MOST reliable)
 
     Returns:
         Initialized LinkedInDataProvider, or None if no data sources available
@@ -575,7 +583,7 @@ async def init_data_provider(
     cookies = get_unofficial_cookies()
 
     # Allow initialization if any data source is available
-    if not cookies and not primary_client and not marketing_client and not fresh_data_client:
+    if not cookies and not primary_client and not marketing_client and not fresh_data_client and not pnd_client:
         logger.info(
             "Data provider disabled - no data sources available",
             recommendation="Run: linkedin-mcp-auth oauth (for Marketing API) or set THIRDPARTY_RAPIDAPI_KEY",
@@ -597,11 +605,12 @@ async def init_data_provider(
         if primary_client and hasattr(primary_client, "_client"):
             underlying_client = primary_client._client
 
-        # Create data provider with full fallback chain
+        # Create data provider with full fallback chain (ordered by reliability)
         provider = LinkedInDataProvider(
             primary_client=underlying_client,
             marketing_client=marketing_client,
             fresh_data_client=fresh_data_client,
+            pnd_client=pnd_client,
             cookies=cookie_dict,
             enable_enhanced=settings.features.browser_fallback,
             enable_headless=settings.features.browser_fallback,
@@ -610,13 +619,15 @@ async def init_data_provider(
         await provider.initialize()
 
         logger.info(
-            "Data provider initialized with fallback chain",
-            primary=underlying_client is not None,
-            marketing=marketing_client is not None,
+            "Data provider initialized with fallback chain (ordered by reliability)",
+            pnd=pnd_client is not None,
             fresh_data=fresh_data_client is not None,
-            cookies_available=bool(cookie_dict),
+            marketing=marketing_client is not None,
             enhanced_enabled=settings.features.browser_fallback,
             headless_enabled=settings.features.browser_fallback,
+            primary=underlying_client is not None,
+            cookies_available=bool(cookie_dict),
+            fallback_order=["pnd", "fresh_data", "enhanced", "headless", "primary"],
         )
 
         return provider
@@ -849,13 +860,15 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
                 logger.warning("Marketing API initialization failed", error=str(e))
 
         # Initialize data provider with fallback chain (after all clients are ready)
-        # This provides automatic fallback: primary → marketing → fresh_data → enhanced → headless
+        # Fallback order by RELIABILITY: pnd → fresh_data → enhanced → headless → primary
+        # The unofficial API (primary) is tried LAST because it's most brittle
         try:
             data_provider_result = await init_data_provider(
                 settings=settings,
                 primary_client=ctx.linkedin_client,
                 marketing_client=marketing_client,
                 fresh_data_client=fresh_data_client,
+                pnd_client=pnd_client,
             )
             ctx.data_provider = data_provider_result
         except Exception as e:

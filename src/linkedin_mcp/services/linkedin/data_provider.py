@@ -2,13 +2,17 @@
 Unified LinkedIn data provider with intelligent fallback.
 
 Orchestrates between multiple data sources to provide reliable
-LinkedIn data access:
+LinkedIn data access. Sources are ordered by RELIABILITY:
 
-1. Primary: tomquirk/linkedin-api (fastest, most features)
-2. Marketing API: LinkedIn Official Marketing/Community Management API (organizations)
-3. Fresh Data API: RapidAPI Fresh LinkedIn Profile Data (profile/company search)
+1. PND API: Professional Network Data API (RapidAPI) - MOST RELIABLE, 55 endpoints
+2. Fresh Data API: RapidAPI Fresh LinkedIn Profile Data (profile/company search)
+3. Marketing API: LinkedIn Official Marketing/Community Management API (organizations)
 4. Enhanced: HTTP client with curl_cffi (anti-detection)
-5. Headless: Browser scraper (most reliable, slowest)
+5. Headless: Browser scraper (slowest but reliable)
+6. Primary: tomquirk/linkedin-api (LEAST RELIABLE - cookie-based, prone to blocking)
+
+The unofficial LinkedIn API (Primary) is placed LAST because it's the most
+brittle - it relies on session cookies that expire and is prone to bot detection.
 
 All operations happen in the background without any visible UI.
 """
@@ -26,6 +30,9 @@ from linkedin_mcp.core.logging import get_logger
 if TYPE_CHECKING:
     from linkedin_mcp.services.linkedin.fresh_data_client import FreshLinkedInDataClient
     from linkedin_mcp.services.linkedin.marketing_client import LinkedInMarketingClient
+    from linkedin_mcp.services.linkedin.professional_network_data_client import (
+        ProfessionalNetworkDataClient,
+    )
 
 logger = get_logger(__name__)
 
@@ -34,19 +41,30 @@ class LinkedInDataProvider:
     """
     Unified LinkedIn data provider with automatic fallback.
 
-    This provider tries multiple data sources in order of speed,
+    This provider tries multiple data sources in order of RELIABILITY,
     automatically falling back when one source fails due to blocking.
+
+    Fallback order (most reliable first):
+    1. PND API - Professional Network Data (paid, 55 endpoints)
+    2. Fresh Data API - RapidAPI (paid)
+    3. Enhanced - curl_cffi with anti-detection
+    4. Headless - browser scraper
+    5. Primary - tomquirk/linkedin-api (LAST - most brittle, cookie-based)
+
+    The unofficial LinkedIn API (Primary) is tried LAST because it's the
+    most prone to failures due to expired cookies and bot detection.
 
     All operations happen in the background - no visible browser windows.
 
     Usage:
         provider = LinkedInDataProvider(
-            primary_client=linkedin_client,  # tomquirk/linkedin-api
+            pnd_client=pnd_client,  # Professional Network Data API (most reliable)
+            primary_client=linkedin_client,  # tomquirk/linkedin-api (fallback only)
             cookies={"li_at": "...", "JSESSIONID": "..."},
         )
         await provider.initialize()
 
-        # Will try primary, then enhanced, then headless
+        # Will try pnd → fresh_data → enhanced → headless → primary
         profile = await provider.get_profile("johndoe")
     """
 
@@ -55,6 +73,7 @@ class LinkedInDataProvider:
         primary_client: Any | None = None,
         marketing_client: "LinkedInMarketingClient | None" = None,
         fresh_data_client: "FreshLinkedInDataClient | None" = None,
+        pnd_client: "ProfessionalNetworkDataClient | None" = None,
         cookies: dict[str, str] | None = None,
         enable_enhanced: bool = True,
         enable_headless: bool = True,
@@ -62,10 +81,19 @@ class LinkedInDataProvider:
         """
         Initialize the data provider.
 
+        Data sources are ordered by RELIABILITY (most reliable first):
+        1. PND API (Professional Network Data) - paid, 55 endpoints, most reliable
+        2. Fresh Data API - paid, reliable
+        3. Marketing API - official LinkedIn API for organizations
+        4. Enhanced - curl_cffi with anti-detection
+        5. Headless - browser scraper
+        6. Primary - tomquirk/linkedin-api (LAST - most brittle, cookie-based)
+
         Args:
-            primary_client: tomquirk/linkedin-api client instance
+            primary_client: tomquirk/linkedin-api client instance (LEAST reliable)
             marketing_client: LinkedIn Marketing API client (Community Management)
             fresh_data_client: Fresh LinkedIn Data API client (RapidAPI)
+            pnd_client: Professional Network Data API client (MOST reliable)
             cookies: LinkedIn cookies for fallback clients
             enable_enhanced: Enable enhanced HTTP client with curl_cffi
             enable_headless: Enable headless browser scraper
@@ -73,6 +101,7 @@ class LinkedInDataProvider:
         self._primary = primary_client
         self._marketing = marketing_client
         self._fresh_data = fresh_data_client
+        self._pnd = pnd_client
         self._cookies = cookies or {}
         self._enable_enhanced = enable_enhanced
         self._enable_headless = enable_headless
@@ -83,20 +112,22 @@ class LinkedInDataProvider:
 
         # Track which sources are working
         self._source_status = {
-            "primary": True,
-            "marketing": True,
+            "pnd": True,
             "fresh_data": True,
+            "marketing": True,
             "enhanced": True,
             "headless": True,
+            "primary": True,
         }
 
         # Failure counts for adaptive fallback
         self._failure_counts = {
-            "primary": 0,
-            "marketing": 0,
+            "pnd": 0,
             "fresh_data": 0,
+            "marketing": 0,
             "enhanced": 0,
             "headless": 0,
+            "primary": 0,
         }
         self._failure_threshold = 3  # Skip source after this many consecutive failures
 
@@ -187,8 +218,32 @@ class LinkedInDataProvider:
             logger.warning(f"Disabling {source} due to repeated failures")
             self._source_status[source] = False
 
+    async def _try_pnd(self, method_name: str, *args, **kwargs) -> dict | None:
+        """Try Professional Network Data API (RapidAPI) - MOST RELIABLE."""
+        if not self._pnd or self._should_skip_source("pnd"):
+            return None
+
+        try:
+            method = getattr(self._pnd, method_name, None)
+            if method is None:
+                return None
+
+            result = await method(*args, **kwargs)
+            # Return None for empty results so fallback chain continues
+            if result is None:
+                return None
+            # Handle error responses from PND API
+            if isinstance(result, dict) and result.get("error"):
+                logger.info("PND API returned error, trying next source", error=result.get("error"))
+                return None
+            self._record_success("pnd")
+            return {"data": result, "source": "pnd_api"}
+        except Exception as e:
+            self._record_failure("pnd", e)
+            return None
+
     async def _try_primary(self, method_name: str, *args, **kwargs) -> dict | None:
-        """Try primary client (tomquirk/linkedin-api)."""
+        """Try primary client (tomquirk/linkedin-api) - LEAST RELIABLE, try last."""
         if not self._primary or self._should_skip_source("primary"):
             return None
 
@@ -291,6 +346,16 @@ class LinkedInDataProvider:
         """
         Execute method with automatic fallback through data sources.
 
+        Sources are ordered by RELIABILITY (most reliable first):
+        1. PND API - Professional Network Data (paid, 55 endpoints)
+        2. Fresh Data API - RapidAPI (paid)
+        3. Enhanced - curl_cffi with anti-detection
+        4. Headless - browser scraper
+        5. Primary - tomquirk/linkedin-api (LAST - most brittle, cookie-based)
+
+        The unofficial LinkedIn API (Primary) is tried LAST because it's the
+        most prone to failures due to expired cookies and bot detection.
+
         Args:
             method_name: Name of the method to call on each source
             *args: Positional arguments
@@ -304,26 +369,32 @@ class LinkedInDataProvider:
         """
         errors = []
 
-        # Try Fresh Data API first (RapidAPI - most reliable when subscribed)
+        # 1. Try PND API first (Professional Network Data - MOST RELIABLE)
+        result = await self._try_pnd(method_name, *args, **kwargs)
+        if result:
+            return result
+
+        # 2. Try Fresh Data API (RapidAPI - reliable when subscribed)
         result = await self._try_fresh_data(method_name, *args, **kwargs)
         if result:
             return result
 
-        # Try primary (tomquirk/linkedin-api)
-        result = await self._try_primary(method_name, *args, **kwargs)
-        if result:
-            return result
-
-        # Try enhanced (curl_cffi)
+        # 3. Try enhanced (curl_cffi with anti-detection)
         result = await self._try_enhanced(method_name, *args, **kwargs)
         if result:
             logger.info(f"Falling back to enhanced client for {method_name}")
             return result
 
-        # Try headless (browser scraper)
+        # 4. Try headless (browser scraper)
         result = await self._try_headless(method_name, *args, **kwargs)
         if result:
             logger.info(f"Falling back to headless scraper for {method_name}")
+            return result
+
+        # 5. Try primary (tomquirk/linkedin-api) - LAST, most brittle
+        result = await self._try_primary(method_name, *args, **kwargs)
+        if result:
+            logger.info(f"Falling back to unofficial API for {method_name}")
             return result
 
         # All sources failed
@@ -331,8 +402,8 @@ class LinkedInDataProvider:
             f"All data sources failed for {method_name}",
             details={
                 "method": method_name,
-                "sources_tried": ["fresh_data", "primary", "enhanced", "headless"],
-                "suggestion": "Try refreshing cookies: linkedin-mcp-auth extract-cookies",
+                "sources_tried": ["pnd", "fresh_data", "enhanced", "headless", "primary"],
+                "suggestion": "Check API keys or try refreshing cookies: linkedin-mcp-auth extract-cookies",
             },
         )
 
@@ -676,41 +747,54 @@ class LinkedInDataProvider:
     # =========================================================================
 
     def get_source_status(self) -> dict[str, Any]:
-        """Get status of all data sources."""
+        """Get status of all data sources (ordered by reliability)."""
         return {
             "sources": {
-                "primary": {
-                    "available": self._primary is not None,
-                    "enabled": self._source_status.get("primary", False),
-                    "failures": self._failure_counts.get("primary", 0),
-                    "type": "linkedin-api (unofficial)",
-                },
-                "marketing": {
-                    "available": self._marketing is not None,
-                    "enabled": self._source_status.get("marketing", False),
-                    "failures": self._failure_counts.get("marketing", 0),
-                    "type": "LinkedIn Marketing API (Community Management)",
+                "pnd": {
+                    "available": self._pnd is not None,
+                    "enabled": self._source_status.get("pnd", False),
+                    "failures": self._failure_counts.get("pnd", 0),
+                    "type": "Professional Network Data API (RapidAPI) - PRIMARY",
+                    "priority": 1,
                 },
                 "fresh_data": {
                     "available": self._fresh_data is not None,
                     "enabled": self._source_status.get("fresh_data", False),
                     "failures": self._failure_counts.get("fresh_data", 0),
                     "type": "Fresh LinkedIn Data API (RapidAPI)",
+                    "priority": 2,
+                },
+                "marketing": {
+                    "available": self._marketing is not None,
+                    "enabled": self._source_status.get("marketing", False),
+                    "failures": self._failure_counts.get("marketing", 0),
+                    "type": "LinkedIn Marketing API (Community Management)",
+                    "priority": 3,
                 },
                 "enhanced": {
                     "available": self._enhanced is not None,
                     "enabled": self._source_status.get("enhanced", False),
                     "failures": self._failure_counts.get("enhanced", 0),
                     "type": "curl_cffi HTTP client",
+                    "priority": 4,
                 },
                 "headless": {
                     "available": self._headless is not None,
                     "enabled": self._source_status.get("headless", False),
                     "failures": self._failure_counts.get("headless", 0),
                     "type": "Patchright/Playwright browser",
+                    "priority": 5,
+                },
+                "primary": {
+                    "available": self._primary is not None,
+                    "enabled": self._source_status.get("primary", False),
+                    "failures": self._failure_counts.get("primary", 0),
+                    "type": "linkedin-api (unofficial) - FALLBACK ONLY",
+                    "priority": 6,
                 },
             },
             "failure_threshold": self._failure_threshold,
+            "fallback_order": ["pnd", "fresh_data", "enhanced", "headless", "primary"],
         }
 
     def reset_source(self, source: str) -> None:
@@ -727,11 +811,17 @@ class LinkedInDataProvider:
 
     def reset_all_sources(self) -> None:
         """Reset all sources to try them again."""
-        for source in ["primary", "marketing", "fresh_data", "enhanced", "headless"]:
+        for source in ["pnd", "fresh_data", "marketing", "enhanced", "headless", "primary"]:
             self.reset_source(source)
 
     async def close(self) -> None:
         """Close all data sources."""
+        if self._pnd:
+            try:
+                await self._pnd.close()
+            except Exception:
+                pass
+
         if self._marketing:
             try:
                 await self._marketing.close()
@@ -767,6 +857,7 @@ async def create_data_provider(
     primary_client: Any | None = None,
     marketing_client: "LinkedInMarketingClient | None" = None,
     fresh_data_client: "FreshLinkedInDataClient | None" = None,
+    pnd_client: "ProfessionalNetworkDataClient | None" = None,
     li_at: str | None = None,
     jsessionid: str | None = None,
     enable_enhanced: bool = True,
@@ -775,10 +866,18 @@ async def create_data_provider(
     """
     Factory function to create an initialized data provider.
 
+    Data sources are ordered by RELIABILITY (most reliable first):
+    1. PND API - Professional Network Data (paid, 55 endpoints)
+    2. Fresh Data API - RapidAPI (paid)
+    3. Enhanced - curl_cffi with anti-detection
+    4. Headless - browser scraper
+    5. Primary - tomquirk/linkedin-api (LAST - most brittle)
+
     Args:
-        primary_client: Optional tomquirk/linkedin-api client
+        primary_client: Optional tomquirk/linkedin-api client (LEAST reliable)
         marketing_client: LinkedIn Marketing API client (Community Management)
         fresh_data_client: Fresh LinkedIn Data API client (RapidAPI)
+        pnd_client: Professional Network Data API client (MOST reliable)
         li_at: LinkedIn session cookie
         jsessionid: JSESSIONID cookie
         enable_enhanced: Enable enhanced HTTP client
@@ -797,6 +896,7 @@ async def create_data_provider(
         primary_client=primary_client,
         marketing_client=marketing_client,
         fresh_data_client=fresh_data_client,
+        pnd_client=pnd_client,
         cookies=cookies,
         enable_enhanced=enable_enhanced,
         enable_headless=enable_headless,
