@@ -8,6 +8,29 @@ A Model Context Protocol (MCP) server that connects Claude to LinkedIn, enabling
 
 ---
 
+## Architecture
+
+### Intelligent API Fallback
+
+The server uses a multi-source architecture that automatically falls back through APIs **ordered by reliability**:
+
+| Priority | Source | Type | Reliability |
+|----------|--------|------|-------------|
+| 1 | Professional Network Data API | RapidAPI (paid) | Highest - 55 endpoints |
+| 2 | Fresh LinkedIn Data API | RapidAPI (paid) | High - profiles & search |
+| 3 | Enhanced HTTP Client | curl_cffi | Medium - anti-detection |
+| 4 | Headless Browser | Playwright | Medium - slowest but reliable |
+| 5 | Unofficial API | Cookie-based | Lowest - prone to blocking |
+
+**Why this order?** The unofficial LinkedIn API (tomquirk/linkedin-api) relies on session cookies that expire and is prone to bot detection. By placing it **last**, the server prioritizes stable, paid APIs and only falls back to the brittle cookie-based method when all else fails.
+
+This architecture ensures:
+- **High availability** - Multiple fallback options
+- **Automatic recovery** - Failures cascade gracefully
+- **Best-effort data** - Always tries the most reliable source first
+
+---
+
 ## Who Is This For?
 
 ### Content Creators & Marketers
@@ -125,12 +148,12 @@ LINKEDIN_CLIENT_ID=your_client_id
 LINKEDIN_CLIENT_SECRET=your_client_secret
 LINKEDIN_API_ENABLED=true
 
-# Enhanced Data API (Required for profile lookups)
-# Without this, profile lookups may be unreliable due to LinkedIn's bot detection
+# Enhanced Data API (Recommended for reliable profile/company lookups)
+# Powers the top 2 fallback sources: Professional Network Data API + Fresh LinkedIn Data API
 THIRDPARTY_RAPIDAPI_KEY=your_api_key
 ```
 
-> **Note**: The enhanced data API key is essential for reliable profile lookups. LinkedIn aggressively blocks bot detection, making direct API access unreliable.
+> **Note**: The RapidAPI key enables the most reliable data sources in the fallback chain. Without it, the server falls back to cookie-based methods which are prone to LinkedIn's bot detection.
 
 ### Authentication
 
@@ -422,6 +445,11 @@ Reconnect the MCP server:
 **Comments failing with permission error**
 - Comments require the "Community Management API" product
 - Apply for access in your LinkedIn Developer Portal
+
+**Search returns empty results**
+- Search relies on session cookies which expire after ~24 hours
+- Refresh cookies: `linkedin-mcp-auth extract-cookies --browser chrome`
+- Note: Profile and company lookups use the RapidAPI fallback and are unaffected
 
 ---
 
