@@ -1,33 +1,29 @@
 # LinkedIn MCP Server
 
-> **AI-powered LinkedIn content creation, research, and analytics.**
+> **One conversation. Every LinkedIn workflow.**
 >
-> Create posts, manage drafts, schedule content, research professionals and companies, and analyze engagement—all through natural conversation with Claude.
-
-A Model Context Protocol (MCP) server that connects Claude to LinkedIn, enabling seamless content workflows through official and enhanced data APIs.
+> Research competitors, draft posts, analyze engagement, schedule content, and manage your professional presence—all from a single AI-powered interface.
 
 ---
 
-## Architecture
+## The Power of Unified AI Workflows
 
-### Intelligent API Fallback
+Imagine this: You ask Claude to research a competitor's LinkedIn presence. Minutes later, you have insights on their content strategy, top-performing posts, and audience engagement patterns. You draft a response post, Claude optimizes it for engagement, and you schedule it for peak hours—all without leaving the conversation.
 
-The server uses a multi-source architecture that automatically falls back through APIs **ordered by reliability**:
+**But it doesn't stop there.**
 
-| Priority | Source | Type | Reliability |
-|----------|--------|------|-------------|
-| 1 | Professional Network Data API | RapidAPI (paid) | Highest - 55 endpoints |
-| 2 | Fresh LinkedIn Data API | RapidAPI (paid) | High - profiles & search |
-| 3 | Enhanced HTTP Client | curl_cffi | Medium - anti-detection |
-| 4 | Headless Browser | Playwright | Medium - slowest but reliable |
-| 5 | Unofficial API | Cookie-based | Lowest - prone to blocking |
+When you combine this MCP with others, the possibilities multiply:
 
-**Why this order?** The unofficial LinkedIn API (tomquirk/linkedin-api) relies on session cookies that expire and is prone to bot detection. By placing it **last**, the server prioritizes stable, paid APIs and only falls back to the brittle cookie-based method when all else fails.
+```
+LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
+```
 
-This architecture ensures:
-- **High availability** - Multiple fallback options
-- **Automatic recovery** - Failures cascade gracefully
-- **Best-effort data** - Always tries the most reliable source first
+1. Pull insights from a LinkedIn thought leader's post
+2. Ask Claude to write a blog article expanding on those ideas
+3. Publish it to your WordPress site (via another MCP)
+4. Create a LinkedIn post promoting the article with the link
+
+**This is the future of professional workflows**—one AI assistant orchestrating your entire digital presence across platforms. No more context switching. No more copy-pasting between tabs. Just seamless, intelligent automation.
 
 ---
 
@@ -477,6 +473,24 @@ ruff check src/ && ruff format src/
 # Type checking
 mypy src/linkedin_mcp
 ```
+
+---
+
+## Architecture
+
+### Intelligent API Fallback
+
+Under the hood, the server uses a multi-source architecture that automatically falls back through APIs ordered by reliability:
+
+| Priority | Source | Reliability |
+|----------|--------|-------------|
+| 1 | Professional Network Data API | Highest - 55 endpoints |
+| 2 | Fresh LinkedIn Data API | High - profiles & search |
+| 3 | Enhanced HTTP Client | Medium - anti-detection |
+| 4 | Headless Browser | Medium - slowest but reliable |
+| 5 | Unofficial API | Lowest - cookie-based, prone to blocking |
+
+This ensures high availability, automatic recovery from failures, and best-effort data retrieval.
 
 ---
 
