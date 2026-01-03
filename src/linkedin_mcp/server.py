@@ -2417,13 +2417,17 @@ async def analyze_engagement(post_urn: str, follower_count: int | None = None) -
             return {"error": "No LinkedIn data provider available. Configure API credentials."}
 
         # Get reactions via data_provider
+        # data_provider returns: {"data": {"reactors": [...], ...}, "source": "..."}
         reactions_result = await ctx.data_provider.get_post_reactions(post_urn)
-        reactions = reactions_result.get("reactions", reactions_result.get("data", []))
+        data = reactions_result.get("data", {})
+        reactions = data.get("reactors", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
         source = reactions_result.get("source", "data_provider")
 
         # Get comments via data_provider
+        # data_provider returns: {"data": {"comments": [...], ...}, "source": "..."}
         comments_result = await ctx.data_provider.get_post_comments(post_urn)
-        comments = comments_result.get("comments", comments_result.get("data", []))
+        data = comments_result.get("data", {})
+        comments = data.get("comments", data.get("data", [])) if isinstance(data, dict) else (data if isinstance(data, list) else [])
 
         # Analyze engagement rate
         engagement_metrics = analyzer.calculate_engagement_rate(
