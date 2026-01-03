@@ -321,9 +321,68 @@ async def init_marketing_client(settings: Settings, official_client: Any) -> Any
         return None
 
 
+async def init_pnd_client(settings: Settings) -> Any:
+    """
+    Initialize the Professional Network Data API client (RapidAPI) - PRIMARY.
+
+    This is the NEW primary API for LinkedIn data with 55 endpoints.
+    It replaces Fresh Data API as the primary source (same creator).
+
+    Requires:
+    - THIRDPARTY_RAPIDAPI_KEY environment variable
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        Initialized ProfessionalNetworkDataClient, or None if not configured
+    """
+    if not settings.third_party.rapidapi_key:
+        logger.info(
+            "Professional Network Data API disabled - no API key configured",
+            recommendation="Set THIRDPARTY_RAPIDAPI_KEY in .env",
+        )
+        return None
+
+    try:
+        from linkedin_mcp.services.linkedin.professional_network_data_client import (
+            ProfessionalNetworkDataClient,
+        )
+
+        client = ProfessionalNetworkDataClient(
+            rapidapi_key=settings.third_party.rapidapi_key.get_secret_value(),
+            timeout=settings.third_party.rapidapi_timeout,
+        )
+
+        logger.info(
+            "Professional Network Data API client initialized (PRIMARY)",
+            features=[
+                "profile_lookup",
+                "profile_search",
+                "profile_interests",
+                "similar_profiles",
+                "articles",
+                "company_search",
+                "posts",
+            ],
+            endpoints=55,
+        )
+        return client
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize Professional Network Data API client",
+            error=str(e),
+        )
+        return None
+
+
 async def init_fresh_data_client(settings: Settings) -> Any:
     """
-    Initialize the Fresh LinkedIn Data API client (RapidAPI).
+    Initialize the Fresh LinkedIn Data API client (RapidAPI) - FALLBACK.
+
+    NOTE: This API is being refactored by the creator. Use Professional
+    Network Data API as primary. This is kept for fallback.
 
     Requires:
     - THIRDPARTY_RAPIDAPI_KEY environment variable
@@ -350,8 +409,9 @@ async def init_fresh_data_client(settings: Settings) -> Any:
         )
 
         logger.info(
-            "Fresh Data API client initialized",
+            "Fresh Data API client initialized (FALLBACK)",
             features=["profile_search", "company_search", "employee_search"],
+            note="Being refactored - PND API is now primary",
         )
         return client
 
@@ -625,7 +685,15 @@ async def shutdown_services(ctx: AppContext) -> None:
         except Exception as e:
             logger.warning("Error closing Marketing API client", error=str(e))
 
-    # Close Fresh Data API client
+    # Close Professional Network Data API client (PRIMARY)
+    if ctx.pnd_client:
+        logger.debug("Closing Professional Network Data API client")
+        try:
+            await ctx.pnd_client.close()
+        except Exception as e:
+            logger.warning("Error closing Professional Network Data API client", error=str(e))
+
+    # Close Fresh Data API client (FALLBACK)
     if ctx.fresh_data_client:
         logger.debug("Closing Fresh Data API client")
         try:
@@ -674,7 +742,8 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         # Note: Marketing client depends on official client, so initialized separately
         official_task = asyncio.create_task(init_official_client(settings))
         linkedin_task = asyncio.create_task(init_linkedin_client(settings))
-        fresh_data_task = asyncio.create_task(init_fresh_data_client(settings))
+        pnd_task = asyncio.create_task(init_pnd_client(settings))  # PRIMARY
+        fresh_data_task = asyncio.create_task(init_fresh_data_client(settings))  # FALLBACK
         db_task = asyncio.create_task(init_database(settings))
         scheduler_task = asyncio.create_task(init_scheduler(settings))
         browser_task = asyncio.create_task(init_browser(settings))
@@ -683,6 +752,7 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         results = await asyncio.gather(
             official_task,
             linkedin_task,
+            pnd_task,
             fresh_data_task,
             db_task,
             scheduler_task,
@@ -694,6 +764,7 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         (
             official_result,
             linkedin_result,
+            pnd_result,
             fresh_data_result,
             db_result,
             scheduler_result,
@@ -718,7 +789,18 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
         else:
             ctx.linkedin_client = linkedin_result
 
-        # Handle Fresh Data API client (RapidAPI)
+        # Handle Professional Network Data API client (RapidAPI) - PRIMARY
+        pnd_client = None
+        if isinstance(pnd_result, Exception):
+            logger.warning(
+                "Professional Network Data API initialization failed",
+                error=str(pnd_result),
+            )
+        else:
+            pnd_client = pnd_result
+            ctx.pnd_client = pnd_result
+
+        # Handle Fresh Data API client (RapidAPI) - FALLBACK
         fresh_data_client = None
         if isinstance(fresh_data_result, Exception):
             logger.warning(
@@ -791,7 +873,8 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             "Server initialized successfully",
             official_api=ctx.has_official_client,
             marketing_api=ctx.has_marketing_client,
-            fresh_data_api=ctx.has_fresh_data_client,
+            pnd_api=ctx.has_pnd_client,  # PRIMARY (55 endpoints)
+            fresh_data_api=ctx.has_fresh_data_client,  # FALLBACK
             unofficial_api=ctx.has_linkedin_client,
             data_provider=ctx.has_data_provider,
             database=ctx.has_database,

@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from linkedin_mcp.services.linkedin.fresh_data_client import FreshLinkedInDataClient
     from linkedin_mcp.services.linkedin.marketing_client import LinkedInMarketingClient
     from linkedin_mcp.services.linkedin.official_client import LinkedInOfficialClient
+    from linkedin_mcp.services.linkedin.professional_network_data_client import (
+        ProfessionalNetworkDataClient,
+    )
 
 
 @dataclass
@@ -50,8 +53,11 @@ class AppContext:
     # LinkedIn Marketing API client (Community Management) - Official, for org lookup
     marketing_client: "LinkedInMarketingClient | None" = None
 
-    # Fresh LinkedIn Data API client (RapidAPI) - Third-party, for search
+    # Fresh LinkedIn Data API client (RapidAPI) - Third-party, for search (FALLBACK)
     fresh_data_client: "FreshLinkedInDataClient | None" = None
+
+    # Professional Network Data API client (RapidAPI) - Third-party, PRIMARY (55 endpoints)
+    pnd_client: "ProfessionalNetworkDataClient | None" = None
 
     # LinkedIn Data Provider with automatic fallback (primary → marketing → fresh_data → enhanced → headless)
     data_provider: "LinkedInDataProvider | None" = None
@@ -102,6 +108,11 @@ class AppContext:
     def has_fresh_data_client(self) -> bool:
         """Check if Fresh LinkedIn Data API client (RapidAPI) is available."""
         return self.fresh_data_client is not None
+
+    @property
+    def has_pnd_client(self) -> bool:
+        """Check if Professional Network Data API client (RapidAPI) is available."""
+        return self.pnd_client is not None
 
     @property
     def has_database(self) -> bool:

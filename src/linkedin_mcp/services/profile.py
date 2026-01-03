@@ -30,8 +30,9 @@ class ProfileEnrichmentEngine:
     into a comprehensive profile. This is NOT a fallback system - it's
     an enrichment system that always provides the most complete data possible.
 
-    Data Sources:
-    - Fresh Data API (RapidAPI) - Most reliable paid source
+    Data Sources (in priority order):
+    - Professional Network Data API (RapidAPI) - NEW PRIMARY (55 endpoints)
+    - Fresh Data API (RapidAPI) - Fallback paid source (being refactored)
     - Primary profile endpoint (API)
     - Contact information (API)
     - Skills and endorsements (API)
@@ -48,10 +49,12 @@ class ProfileEnrichmentEngine:
         linkedin_client: Any,
         browser_automation: Any = None,
         fresh_data_client: Any = None,
+        pnd_client: Any = None,  # Professional Network Data API client
     ) -> None:
         self._client = linkedin_client
         self._browser = browser_automation
         self._fresh_data = fresh_data_client
+        self._pnd_client = pnd_client  # New primary API
 
     async def get_enriched_profile(
         self,
@@ -89,7 +92,13 @@ class ProfileEnrichmentEngine:
             "web_search": self._fetch_from_web_search(public_id),
         }
 
-        # Fresh Data API (RapidAPI) - Most reliable paid source
+        # Professional Network Data API (RapidAPI) - NEW PRIMARY (55 endpoints)
+        if self._pnd_client:
+            tasks["pnd_api"] = self._fetch_from_pnd_api(public_id)
+            # Also fetch unique PND data in parallel
+            tasks["pnd_interests"] = self._fetch_pnd_interests(public_id)
+
+        # Fresh Data API (RapidAPI) - Fallback paid source (being refactored)
         if self._fresh_data:
             tasks["fresh_data"] = self._fetch_from_fresh_data(public_id)
 
@@ -153,8 +162,28 @@ class ProfileEnrichmentEngine:
             logger.debug("Primary profile fetch failed", error=str(e))
             return None
 
+    async def _fetch_from_pnd_api(self, public_id: str) -> dict[str, Any] | None:
+        """Fetch profile data from Professional Network Data API (RapidAPI) - PRIMARY."""
+        if not self._pnd_client:
+            return None
+        try:
+            return await self._pnd_client.get_profile(public_id=public_id)
+        except Exception as e:
+            logger.debug("Professional Network Data API profile fetch failed", error=str(e))
+            return None
+
+    async def _fetch_pnd_interests(self, public_id: str) -> dict[str, Any] | None:
+        """Fetch profile interests from Professional Network Data API (unique feature)."""
+        if not self._pnd_client:
+            return None
+        try:
+            return await self._pnd_client.get_profile_interests(public_id=public_id)
+        except Exception as e:
+            logger.debug("PND API interests fetch failed", error=str(e))
+            return None
+
     async def _fetch_from_fresh_data(self, public_id: str) -> dict[str, Any] | None:
-        """Fetch profile data from Fresh Data API (RapidAPI)."""
+        """Fetch profile data from Fresh Data API (RapidAPI) - FALLBACK."""
         if not self._fresh_data:
             return None
         try:
@@ -274,40 +303,91 @@ class ProfileEnrichmentEngine:
         Merge results from all sources into a unified profile.
 
         Priority order for conflicts (highest priority first):
-        1. Fresh Data API (most reliable paid source - RECOMMENDED)
-        2. Browser scraping (reliable real data when API fails)
-        3. Primary profile API (linkedin-api - may be blocked)
-        4. Search results
-        5. Web search (public data)
+        1. Professional Network Data API (NEW PRIMARY - 55 endpoints)
+        2. Fresh Data API (fallback paid source - being refactored)
+        3. Browser scraping (reliable real data when API fails)
+        4. Primary profile API (linkedin-api - may be blocked)
+        5. Search results
+        6. Web search (public data)
         """
         profile: dict[str, Any] = {
             "public_id": public_id,
         }
 
-        # Fresh Data API is HIGHEST PRIORITY - reliable paid source (RapidAPI)
-        # Start with Fresh Data API data as the base (most reliable)
+        # Professional Network Data API is HIGHEST PRIORITY (NEW - 55 endpoints)
+        # Start with PND API data as the base (most reliable, more features)
+        pnd_data = sources.get("pnd_api")
+        if pnd_data and isinstance(pnd_data, dict):
+            # PND API uses same field names as Fresh Data API (same creator)
+            profile["firstName"] = pnd_data.get("first_name", "")
+            profile["lastName"] = pnd_data.get("last_name", "")
+            profile["headline"] = pnd_data.get("headline", "")
+            profile["summary"] = pnd_data.get("summary") or pnd_data.get("about", "")
+            profile["locationName"] = pnd_data.get("location") or pnd_data.get("city", "")
+            profile["profilePicture"] = pnd_data.get("profile_image_url", "")
+            profile["currentCompany"] = pnd_data.get("current_company", "")
+            profile["industry"] = pnd_data.get("industry", "")
+            profile["follower_count"] = pnd_data.get("follower_count")
+            profile["connection_count"] = pnd_data.get("connection_count")
+            # NEW fields only available in PND API
+            profile["last_active"] = pnd_data.get("last_active")
+            profile["is_premium"] = pnd_data.get("premium", False)
+            profile["open_to_work"] = pnd_data.get("open_to_work", False)
+            profile["is_hiring"] = pnd_data.get("hiring", False)
+            # Store rich data (experiences, education, etc.)
+            if pnd_data.get("experiences") or pnd_data.get("education"):
+                profile["_pnd_data"] = {
+                    "experiences": pnd_data.get("experiences", []),
+                    "education": pnd_data.get("education", []),
+                    "skills": pnd_data.get("skills", []),
+                    "languages": pnd_data.get("languages", []),
+                }
+            logger.debug("Professional Network Data API provided profile base", public_id=public_id)
+
+        # Add PND interests data (unique feature)
+        pnd_interests = sources.get("pnd_interests")
+        if pnd_interests and isinstance(pnd_interests, dict) and not pnd_interests.get("error"):
+            profile["interests"] = {
+                "influencers": pnd_interests.get("influencers", []),
+                "companies": pnd_interests.get("companies", []),
+                "groups": pnd_interests.get("groups", []),
+                "schools": pnd_interests.get("schools", []),
+                "topics": pnd_interests.get("topics", []),
+            }
+
+        # Fresh Data API fills in gaps (fallback - being refactored)
         fresh_data = sources.get("fresh_data")
         if fresh_data and isinstance(fresh_data, dict):
-            # Fresh Data API uses different field names - map to standard
-            profile["firstName"] = fresh_data.get("first_name", "")
-            profile["lastName"] = fresh_data.get("last_name", "")
-            profile["headline"] = fresh_data.get("headline", "")
-            profile["summary"] = fresh_data.get("about", "")
-            profile["locationName"] = fresh_data.get("city", "")
-            profile["profilePicture"] = fresh_data.get("profile_image_url", "")
-            profile["currentCompany"] = fresh_data.get("company", "")
-            profile["industry"] = fresh_data.get("company_industry", "")
-            profile["follower_count"] = fresh_data.get("follower_count")
-            profile["connection_count"] = fresh_data.get("connection_count")
-            # Store rich data (experiences, education, etc.)
-            if fresh_data.get("experiences") or fresh_data.get("educations"):
+            # Fresh Data API uses similar field names - only fill gaps
+            if not profile.get("firstName"):
+                profile["firstName"] = fresh_data.get("first_name", "")
+            if not profile.get("lastName"):
+                profile["lastName"] = fresh_data.get("last_name", "")
+            if not profile.get("headline"):
+                profile["headline"] = fresh_data.get("headline", "")
+            if not profile.get("summary"):
+                profile["summary"] = fresh_data.get("about", "")
+            if not profile.get("locationName"):
+                profile["locationName"] = fresh_data.get("city", "")
+            if not profile.get("profilePicture"):
+                profile["profilePicture"] = fresh_data.get("profile_image_url", "")
+            if not profile.get("currentCompany"):
+                profile["currentCompany"] = fresh_data.get("company", "")
+            if not profile.get("industry"):
+                profile["industry"] = fresh_data.get("company_industry", "")
+            if not profile.get("follower_count"):
+                profile["follower_count"] = fresh_data.get("follower_count")
+            if not profile.get("connection_count"):
+                profile["connection_count"] = fresh_data.get("connection_count")
+            # Store rich data if PND didn't provide it
+            if not profile.get("_pnd_data") and (fresh_data.get("experiences") or fresh_data.get("educations")):
                 profile["_fresh_data"] = {
                     "experiences": fresh_data.get("experiences", []),
                     "educations": fresh_data.get("educations", []),
                     "languages": fresh_data.get("languages", []),
                     "certifications": fresh_data.get("certifications", []),
                 }
-            logger.debug("Fresh Data API provided profile base", public_id=public_id)
+            logger.debug("Fresh Data API filled profile gaps", public_id=public_id)
 
         # Primary profile API fills in gaps (linkedin-api - may be blocked by bot detection)
         primary = sources.get("profile")

@@ -54,6 +54,8 @@ class CacheService:
     TTL_CONNECTIONS = 1800  # 30 minutes
     TTL_SEARCH = 900  # 15 minutes
     TTL_ANALYTICS = 120  # 2 minutes
+    TTL_COMPANY = 7200  # 2 hours
+    TTL_ARTICLES = 3600  # 1 hour
 
     def __init__(self, default_ttl: int = 300, max_size: int = 1000) -> None:
         self._cache: dict[str, CacheEntry] = {}

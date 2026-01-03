@@ -67,6 +67,7 @@ async def debug_context() -> dict:
                 "has_linkedin_client": ctx.has_linkedin_client,
                 "has_marketing_client": ctx.has_marketing_client,
                 "has_fresh_data_client": ctx.has_fresh_data_client,
+                "has_pnd_client": ctx.has_pnd_client,
                 "has_data_provider": ctx.has_data_provider,
                 "has_database": ctx.has_database,
                 "has_scheduler": ctx.has_scheduler,
@@ -76,6 +77,7 @@ async def debug_context() -> dict:
             "official_api": official_status,
             "data_provider": {
                 "initialized": ctx.has_data_provider,
+                "pnd_client": ctx.has_pnd_client,
                 "marketing_client": ctx.has_marketing_client,
                 "fresh_data_client": ctx.has_fresh_data_client,
             },
@@ -235,10 +237,12 @@ async def get_profile(
 
         # Use Profile Enrichment Engine for comprehensive data
         # Pass all available sources - engine handles None gracefully
+        # Priority: PND API (PRIMARY, 55 endpoints) → Fresh Data (FALLBACK) → Browser → Primary
         engine = ProfileEnrichmentEngine(
             ctx.linkedin_client,  # Can be None - engine handles it
             browser,
-            fresh_data_client=ctx.fresh_data_client,
+            fresh_data_client=ctx.fresh_data_client,  # FALLBACK
+            pnd_client=ctx.pnd_client,  # PRIMARY (55 endpoints)
         )
         enriched_profile = await engine.get_enriched_profile(
             public_id=profile_id,
@@ -407,6 +411,282 @@ async def get_profile_skills(profile_id: str) -> dict:
         }
     except Exception as e:
         logger.error("Failed to fetch skills", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+# =============================================================================
+# Professional Network Data API - Unique Features (55 endpoints)
+# =============================================================================
+
+
+@mcp.tool()
+async def get_profile_interests(profile_id: str) -> dict:
+    """
+    Get profile interests including influencers, companies, groups, and topics.
+
+    This data is unique to the Professional Network Data API and provides
+    insights into what/who a person follows on LinkedIn.
+
+    Args:
+        profile_id: LinkedIn public ID (e.g., "johndoe")
+
+    Returns:
+        Profile interests organized by category (influencers, companies, groups, topics)
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.pnd_client:
+        return {"error": "Professional Network Data API not configured. Set THIRDPARTY_RAPIDAPI_KEY."}
+
+    cache_key = cache.make_key("interests", profile_id)
+
+    try:
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "interests": cached_data, "cached": True}
+
+        interests = await ctx.pnd_client.get_profile_interests(public_id=profile_id)
+
+        if interests.get("error"):
+            return {"error": interests.get("error")}
+
+        await cache.set(cache_key, interests, CacheService.TTL_PROFILE)
+
+        return {
+            "success": True,
+            "profile_id": profile_id,
+            "interests": interests,
+            "cached": False,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch profile interests", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_similar_profiles(profile_id: str, limit: int = 10) -> dict:
+    """
+    Get profiles similar to a given profile.
+
+    Uses the Professional Network Data API to find similar profiles based on
+    industry, role, skills, and other factors.
+
+    Args:
+        profile_id: LinkedIn public ID (e.g., "johndoe")
+        limit: Maximum number of similar profiles to return (default: 10)
+
+    Returns:
+        List of similar profiles with relevance scoring
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.pnd_client:
+        return {"error": "Professional Network Data API not configured. Set THIRDPARTY_RAPIDAPI_KEY."}
+
+    cache_key = cache.make_key("similar", profile_id, str(limit))
+
+    try:
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "similar_profiles": cached_data, "cached": True}
+
+        similar = await ctx.pnd_client.get_similar_profiles(public_id=profile_id, limit=limit)
+
+        # Handle both list and dict responses from client
+        if isinstance(similar, list):
+            profiles = similar
+        elif isinstance(similar, dict):
+            if similar.get("error"):
+                return {"error": similar.get("error")}
+            profiles = similar.get("data", similar.get("profiles", []))
+        else:
+            profiles = []
+        await cache.set(cache_key, profiles, CacheService.TTL_PROFILE)
+
+        return {
+            "success": True,
+            "profile_id": profile_id,
+            "similar_profiles": profiles,
+            "count": len(profiles),
+            "cached": False,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch similar profiles", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_profile_articles(profile_id: str, limit: int = 20) -> dict:
+    """
+    Get articles written by a LinkedIn profile.
+
+    Uses the Professional Network Data API to fetch articles (long-form content)
+    published by the specified profile.
+
+    Args:
+        profile_id: LinkedIn public ID (e.g., "johndoe")
+        limit: Maximum number of articles to return (default: 20)
+
+    Returns:
+        List of articles with title, content preview, and engagement metrics
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.pnd_client:
+        return {"error": "Professional Network Data API not configured. Set THIRDPARTY_RAPIDAPI_KEY."}
+
+    cache_key = cache.make_key("articles", profile_id, str(limit))
+
+    try:
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "articles": cached_data, "cached": True}
+
+        articles = await ctx.pnd_client.get_profile_articles(public_id=profile_id, limit=limit)
+
+        # Handle both list and dict responses from client
+        if isinstance(articles, list):
+            article_list = articles
+        elif isinstance(articles, dict):
+            if articles.get("error"):
+                return {"error": articles.get("error")}
+            article_list = articles.get("data", articles.get("articles", []))
+        else:
+            article_list = []
+        await cache.set(cache_key, article_list, CacheService.TTL_ARTICLES)
+
+        return {
+            "success": True,
+            "profile_id": profile_id,
+            "articles": article_list,
+            "count": len(article_list),
+            "cached": False,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch profile articles", error=str(e), profile_id=profile_id)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_article(article_url: str) -> dict:
+    """
+    Get the full content of a LinkedIn article.
+
+    Uses the Professional Network Data API to fetch the complete article
+    content, author information, and engagement metrics.
+
+    Args:
+        article_url: Full URL of the LinkedIn article
+
+    Returns:
+        Article content with title, body, author info, and engagement data
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.pnd_client:
+        return {"error": "Professional Network Data API not configured. Set THIRDPARTY_RAPIDAPI_KEY."}
+
+    # Create a cache key from the URL
+    import hashlib
+    url_hash = hashlib.md5(article_url.encode()).hexdigest()[:12]
+    cache_key = cache.make_key("article", url_hash)
+
+    try:
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "article": cached_data, "cached": True}
+
+        article = await ctx.pnd_client.get_article(article_url=article_url)
+
+        if article.get("error"):
+            return {"error": article.get("error")}
+
+        await cache.set(cache_key, article, CacheService.TTL_PROFILE)
+
+        return {
+            "success": True,
+            "article": article,
+            "cached": False,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch article", error=str(e), article_url=article_url)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_company_by_domain(domain: str) -> dict:
+    """
+    Get company information by website domain.
+
+    Uses the Professional Network Data API to look up a company by its
+    website domain (e.g., "anthropic.com" → Anthropic).
+
+    Args:
+        domain: Company website domain (e.g., "anthropic.com")
+
+    Returns:
+        Company information including name, industry, size, and LinkedIn URL
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.cache import CacheService, get_cache
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    cache = get_cache()
+
+    if not ctx.pnd_client:
+        return {"error": "Professional Network Data API not configured. Set THIRDPARTY_RAPIDAPI_KEY."}
+
+    cache_key = cache.make_key("company_domain", domain)
+
+    try:
+        cached_data = await cache.get(cache_key)
+        if cached_data:
+            return {"success": True, "company": cached_data, "cached": True}
+
+        company = await ctx.pnd_client.get_company_by_domain(domain=domain)
+
+        # Handle None or dict responses from client
+        if company is None:
+            return {"error": f"No company found for domain: {domain}"}
+        if isinstance(company, dict) and company.get("error"):
+            return {"error": company.get("error")}
+
+        await cache.set(cache_key, company, CacheService.TTL_COMPANY)
+
+        return {
+            "success": True,
+            "domain": domain,
+            "company": company,
+            "cached": False,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch company by domain", error=str(e), domain=domain)
         return {"error": str(e)}
 
 
