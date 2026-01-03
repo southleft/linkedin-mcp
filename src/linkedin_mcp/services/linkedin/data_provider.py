@@ -489,6 +489,53 @@ class LinkedInDataProvider:
         )
 
     # =========================================================================
+    # Engagement Methods (Reactions, Comments)
+    # =========================================================================
+
+    async def get_post_reactions(
+        self,
+        post_urn: str,
+    ) -> dict[str, Any]:
+        """
+        Get reactions on a LinkedIn post.
+
+        Falls back through: PND → Fresh Data → Primary
+
+        Args:
+            post_urn: LinkedIn post URN (e.g., "urn:li:activity:123456")
+
+        Returns:
+            Reactions data with source information
+        """
+        return await self._execute_with_fallback(
+            "get_post_reactions",
+            post_urn,
+        )
+
+    async def get_post_comments(
+        self,
+        post_urn: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Get comments on a LinkedIn post.
+
+        Falls back through: PND → Fresh Data → Primary
+
+        Args:
+            post_urn: LinkedIn post URN (e.g., "urn:li:activity:123456")
+            limit: Maximum comments to return
+
+        Returns:
+            Comments data with source information
+        """
+        return await self._execute_with_fallback(
+            "get_post_comments",
+            post_urn,
+            limit=limit,
+        )
+
+    # =========================================================================
     # Connection Methods
     # =========================================================================
 
@@ -618,6 +665,29 @@ class LinkedInDataProvider:
         raise LinkedInAPIError(
             "Failed to search companies from all sources",
             details={"query": query},
+        )
+
+    async def get_company_posts(
+        self,
+        company_id: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """
+        Get posts/updates from a company page.
+
+        Falls back through: PND → Fresh Data → Primary
+
+        Args:
+            company_id: Company's public identifier (URL slug, e.g., 'microsoft')
+            limit: Maximum posts to return
+
+        Returns:
+            Company posts with source information
+        """
+        return await self._execute_with_fallback(
+            "get_company_posts",
+            company_id,
+            limit=limit,
         )
 
     async def get_company_employees(
