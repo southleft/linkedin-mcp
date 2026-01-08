@@ -231,6 +231,11 @@ class LinkedInDataProvider:
             result = await method(*args, **kwargs)
             # Return None for empty results so fallback chain continues
             if result is None:
+                logger.info("PND API returned None, trying next source")
+                return None
+            # Handle empty list/dict results (PND client returns [] on error)
+            if isinstance(result, (list, dict)) and len(result) == 0:
+                logger.info("PND API returned empty results, trying next source")
                 return None
             # Handle error responses from PND API
             if isinstance(result, dict) and result.get("error"):
@@ -484,7 +489,7 @@ class LinkedInDataProvider:
         """Get posts from a specific profile."""
         return await self._execute_with_fallback(
             "get_profile_posts",
-            public_id,
+            public_id=public_id,  # Pass as keyword arg to match Fresh Data client signature
             limit=limit,
         )
 
@@ -686,7 +691,7 @@ class LinkedInDataProvider:
         """
         return await self._execute_with_fallback(
             "get_company_posts",
-            company_id,
+            company_id=company_id,  # Pass as keyword arg to match Fresh Data client signature
             limit=limit,
         )
 

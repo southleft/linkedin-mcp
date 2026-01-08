@@ -994,10 +994,20 @@ class FreshLinkedInDataClient:
             return []
 
     def _normalize_post(self, data: dict) -> dict[str, Any]:
-        """Normalize post data to consistent format."""
+        """Normalize post data to consistent format.
+
+        Includes both nested and flat field names for compatibility with
+        analytics functions that expect numLikes/numComments.
+        """
+        num_likes = data.get("num_likes", 0) or 0
+        num_comments = data.get("num_comments", 0) or 0
+        num_reposts = data.get("num_reposts", 0) or 0
+        text_content = data.get("text") or data.get("commentary") or ""
+
         return {
             "urn": data.get("urn") or data.get("post_urn"),
-            "text": data.get("text") or data.get("commentary"),
+            "text": text_content,
+            "commentary": text_content,  # Alias for analytics compatibility
             "post_url": data.get("post_url") or data.get("url"),
             "author": {
                 "name": data.get("poster_name") or data.get("author_name"),
@@ -1005,11 +1015,16 @@ class FreshLinkedInDataClient:
                 "profile_url": data.get("poster_linkedin_url") or data.get("author_url"),
                 "profile_image": data.get("poster_image_url") or data.get("author_image"),
             },
+            # Nested format (new style)
             "engagement": {
-                "likes": data.get("num_likes", 0),
-                "comments": data.get("num_comments", 0),
-                "reposts": data.get("num_reposts", 0),
+                "likes": num_likes,
+                "comments": num_comments,
+                "reposts": num_reposts,
             },
+            # Flat format (for analytics compatibility)
+            "numLikes": num_likes,
+            "numComments": num_comments,
+            "numReposts": num_reposts,
             "media": {
                 "images": data.get("images", []),
                 "video": data.get("video"),

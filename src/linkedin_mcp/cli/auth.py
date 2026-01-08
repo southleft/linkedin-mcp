@@ -101,6 +101,18 @@ def cmd_oauth(args: argparse.Namespace) -> int:
     print("A browser window will open for you to log in to LinkedIn.")
     print()
 
+    # OAuth scopes for LinkedIn API
+    # Community Management API enabled January 2026
+    # Note: w_member_social includes posts, comments, and reactions per LinkedIn docs
+    scopes = [
+        # Core OIDC scopes (required)
+        "openid",
+        "profile",
+        "email",
+        # Share on LinkedIn - posts, comments, and reactions
+        "w_member_social",
+    ]
+
     # Initialize client
     client = LinkedInOfficialClient(
         client_id=settings.linkedin.client_id.get_secret_value()
@@ -110,7 +122,7 @@ def cmd_oauth(args: argparse.Namespace) -> int:
         if settings.linkedin.client_secret
         else "",
         redirect_uri=settings.linkedin.redirect_uri,
-        scopes=["openid", "profile", "email", "w_member_social"],
+        scopes=scopes,
     )
 
     # Start authentication
