@@ -43,10 +43,108 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             success_html = """
             <!DOCTYPE html>
             <html>
-            <head><title>LinkedIn Authorization</title></head>
-            <body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h1 style="color: #0077b5;">✅ Authorization Successful!</h1>
-                <p>You can close this window and return to Claude.</p>
+            <head>
+                <meta charset="UTF-8">
+                <title>LinkedIn Authorization</title>
+                <style>
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                        text-align: center;
+                        padding: 60px 20px;
+                        background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+                        min-height: 100vh;
+                        margin: 0;
+                        box-sizing: border-box;
+                    }
+                    .container {
+                        background: white;
+                        border-radius: 12px;
+                        padding: 40px;
+                        max-width: 480px;
+                        margin: 0 auto;
+                        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+                    }
+                    .checkmark {
+                        width: 64px;
+                        height: 64px;
+                        background: #0a66c2;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        margin: 0 auto 24px;
+                    }
+                    .checkmark svg {
+                        width: 32px;
+                        height: 32px;
+                        fill: white;
+                    }
+                    h1 {
+                        color: #0a66c2;
+                        font-size: 24px;
+                        font-weight: 600;
+                        margin: 0 0 12px;
+                    }
+                    p {
+                        color: #666;
+                        font-size: 16px;
+                        margin: 0;
+                    }
+                    .scopes {
+                        margin-top: 24px;
+                        padding-top: 24px;
+                        border-top: 1px solid #e0e0e0;
+                        text-align: left;
+                    }
+                    .scopes h3 {
+                        font-size: 14px;
+                        color: #333;
+                        margin: 0 0 12px;
+                        font-weight: 600;
+                    }
+                    .scope-item {
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 0;
+                        font-size: 13px;
+                        color: #555;
+                    }
+                    .scope-item svg {
+                        width: 16px;
+                        height: 16px;
+                        fill: #0a66c2;
+                        margin-right: 10px;
+                        flex-shrink: 0;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="checkmark">
+                        <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
+                    <h1>Authorization Successful</h1>
+                    <p>You can close this window and return to Claude.</p>
+                    <div class="scopes">
+                        <h3>Permissions Granted:</h3>
+                        <div class="scope-item">
+                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            <span><strong>openid</strong> — OpenID Connect authentication</span>
+                        </div>
+                        <div class="scope-item">
+                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            <span><strong>profile</strong> — Basic profile information</span>
+                        </div>
+                        <div class="scope-item">
+                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            <span><strong>email</strong> — Email address</span>
+                        </div>
+                        <div class="scope-item">
+                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            <span><strong>w_member_social</strong> — Create posts, comments, reactions</span>
+                        </div>
+                    </div>
+                </div>
             </body>
             </html>
             """
@@ -61,10 +159,63 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             error_html = f"""
             <!DOCTYPE html>
             <html>
-            <head><title>LinkedIn Authorization Failed</title></head>
-            <body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h1 style="color: #c00;">❌ Authorization Failed</h1>
-                <p>{self.server.auth_error}</p>
+            <head>
+                <meta charset="UTF-8">
+                <title>LinkedIn Authorization Failed</title>
+                <style>
+                    body {{
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                        text-align: center;
+                        padding: 60px 20px;
+                        background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+                        min-height: 100vh;
+                        margin: 0;
+                        box-sizing: border-box;
+                    }}
+                    .container {{
+                        background: white;
+                        border-radius: 12px;
+                        padding: 40px;
+                        max-width: 480px;
+                        margin: 0 auto;
+                        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+                    }}
+                    .error-icon {{
+                        width: 64px;
+                        height: 64px;
+                        background: #dc3545;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        margin: 0 auto 24px;
+                    }}
+                    .error-icon svg {{
+                        width: 32px;
+                        height: 32px;
+                        fill: white;
+                    }}
+                    h1 {{
+                        color: #dc3545;
+                        font-size: 24px;
+                        font-weight: 600;
+                        margin: 0 0 12px;
+                    }}
+                    p {{
+                        color: #666;
+                        font-size: 16px;
+                        margin: 0;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error-icon">
+                        <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </div>
+                    <h1>Authorization Failed</h1>
+                    <p>{self.server.auth_error}</p>
+                </div>
             </body>
             </html>
             """

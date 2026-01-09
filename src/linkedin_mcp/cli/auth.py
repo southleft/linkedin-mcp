@@ -330,8 +330,11 @@ def main() -> int:
     if not args.command:
         args = parser.parse_args(["status"])
 
-    # Configure logging
+    # Configure logging - use console format and suppress INFO logs for cleaner CLI output
     settings = get_settings()
+    # Override to console format and WARNING level for CLI
+    settings.logging.format = "console"
+    settings.logging.level = "WARNING"
     configure_logging(settings.logging)
 
     # Run command
