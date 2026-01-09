@@ -116,7 +116,7 @@ def cmd_oauth(args: argparse.Namespace) -> int:
     print("   • openid          - OpenID Connect authentication")
     print("   • profile         - Basic profile information (name, photo)")
     print("   • email           - Email address")
-    print("   • w_member_social - Create posts, comments, and reactions")
+    print("   • w_member_social - Create and manage posts")
     print("   ─────────────────────────────────────────────────────────")
     print()
     print("A browser window will open for you to authorize these permissions.")
