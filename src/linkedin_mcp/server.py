@@ -133,25 +133,75 @@ async def get_my_profile() -> dict:
     logger = get_logger(__name__)
     ctx = get_context()
 
-    # Prefer Official API - it's reliable and works consistently
+    result = {
+        "success": True,
+        "profile": {},
+        "source": "official_api",
+        "authentication": {
+            "method": "OAuth 2.0",
+            "scopes": ["openid", "profile", "email", "w_member_social"],
+        },
+    }
+
+    # Get Official API data first (proves OAuth authentication)
+    official_profile = None
     if ctx.has_official_client:
         try:
-            profile = ctx.official_client.get_my_profile()
-            if profile:
-                return {"success": True, "profile": profile, "source": "official_api"}
+            official_profile = ctx.official_client.get_my_profile()
+            if official_profile:
+                result["profile"] = {
+                    "id": official_profile.get("id"),
+                    "first_name": official_profile.get("first_name"),
+                    "last_name": official_profile.get("last_name"),
+                    "name": official_profile.get("name"),
+                    "email": official_profile.get("email"),
+                    "email_verified": official_profile.get("email_verified"),
+                    "picture_url": official_profile.get("picture_url"),
+                }
         except Exception as e:
-            logger.warning("Official API failed, trying unofficial", error=str(e))
+            logger.warning("Official API failed", error=str(e))
 
-    # Fall back to unofficial API
+    # Try to enrich with unofficial API data for more details
     if ctx.linkedin_client:
         try:
-            profile = await ctx.linkedin_client.get_own_profile()
-            return {"success": True, "profile": profile, "source": "unofficial_api"}
-        except Exception as e:
-            logger.error("Failed to fetch profile from unofficial API", error=str(e))
-            return {"error": str(e)}
+            unofficial_profile = await ctx.linkedin_client.get_own_profile()
+            if unofficial_profile:
+                # Extract public_id from unofficial profile
+                public_id = (
+                    unofficial_profile.get("public_id")
+                    or unofficial_profile.get("publicIdentifier")
+                    or unofficial_profile.get("miniProfile", {}).get("publicIdentifier")
+                )
 
-    return {"error": "No LinkedIn client available. Configure OAuth token or session cookies."}
+                # Add enriched data
+                result["profile"]["public_id"] = public_id
+                result["profile"]["headline"] = (
+                    unofficial_profile.get("headline")
+                    or unofficial_profile.get("miniProfile", {}).get("occupation")
+                )
+                result["profile"]["location"] = unofficial_profile.get("locationName") or unofficial_profile.get("geoLocationName")
+                result["profile"]["industry"] = unofficial_profile.get("industryName")
+                result["profile"]["connections"] = unofficial_profile.get("connections") or unofficial_profile.get("connectionsCount")
+                result["profile"]["profile_url"] = f"https://www.linkedin.com/in/{public_id}" if public_id else None
+
+                # Add experience summary
+                experience = unofficial_profile.get("experience", [])
+                if experience and len(experience) > 0:
+                    current_role = experience[0]
+                    result["profile"]["current_position"] = {
+                        "title": current_role.get("title"),
+                        "company": current_role.get("companyName"),
+                        "start_date": current_role.get("timePeriod", {}).get("startDate"),
+                    }
+
+                result["enriched_from"] = "unofficial_api"
+        except Exception as e:
+            logger.debug("Could not enrich profile with unofficial API", error=str(e))
+
+    if not result["profile"]:
+        return {"error": "No LinkedIn client available. Configure OAuth token or session cookies."}
+
+    return result
 
 
 @mcp.tool()
