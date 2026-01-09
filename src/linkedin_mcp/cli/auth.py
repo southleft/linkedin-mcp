@@ -97,10 +97,6 @@ def cmd_oauth(args: argparse.Namespace) -> int:
             print("Use --force to re-authenticate anyway.")
             return 0
 
-    print("Starting OAuth flow...")
-    print("A browser window will open for you to log in to LinkedIn.")
-    print()
-
     # OAuth scopes for LinkedIn API
     # Community Management API enabled January 2026
     # Note: w_member_social includes posts, comments, and reactions per LinkedIn docs
@@ -112,6 +108,19 @@ def cmd_oauth(args: argparse.Namespace) -> int:
         # Share on LinkedIn - posts, comments, and reactions
         "w_member_social",
     ]
+
+    print("Requesting OAuth 2.0 Authorization with the following scopes:")
+    print()
+    print("   📋 SCOPES REQUESTED:")
+    print("   ─────────────────────────────────────────────────────────")
+    print("   • openid          - OpenID Connect authentication")
+    print("   • profile         - Basic profile information (name, photo)")
+    print("   • email           - Email address")
+    print("   • w_member_social - Create posts, comments, and reactions")
+    print("   ─────────────────────────────────────────────────────────")
+    print()
+    print("A browser window will open for you to authorize these permissions.")
+    print()
 
     # Initialize client
     client = LinkedInOfficialClient(
