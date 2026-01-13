@@ -314,12 +314,16 @@ class LinkedInOfficialClient:
             return False
         return True
 
-    def get_authorization_url(self, state: Optional[str] = None) -> str:
+    def get_authorization_url(
+        self, state: Optional[str] = None, force_consent: bool = False
+    ) -> str:
         """
         Generate the OAuth authorization URL.
 
         Args:
             state: Optional state parameter for CSRF protection
+            force_consent: If True, adds prompt=consent to force the consent screen
+                          to appear even if user has already authorized the app
 
         Returns:
             Authorization URL to redirect the user to
@@ -334,9 +338,17 @@ class LinkedInOfficialClient:
             "scope": " ".join(self.scopes),
             "state": state,
         }
+
+        # Add prompt=consent to force the consent screen (OIDC standard parameter)
+        # This ensures the user sees the permissions being requested
+        if force_consent:
+            params["prompt"] = "consent"
+
         return f"{self.AUTH_URL}?{urlencode(params)}"
 
-    def authenticate_interactive(self, timeout: int = 120) -> bool:
+    def authenticate_interactive(
+        self, timeout: int = 120, force_consent: bool = False
+    ) -> bool:
         """
         Start interactive OAuth flow with local callback server.
 
@@ -345,6 +357,8 @@ class LinkedInOfficialClient:
 
         Args:
             timeout: Maximum seconds to wait for authentication
+            force_consent: If True, forces LinkedIn to show the consent screen
+                          even if user has already authorized the app
 
         Returns:
             True if authentication was successful
@@ -365,7 +379,7 @@ class LinkedInOfficialClient:
         server.timeout = timeout
 
         # Generate auth URL and open browser
-        auth_url = self.get_authorization_url(state)
+        auth_url = self.get_authorization_url(state, force_consent=force_consent)
         logger.info("Opening browser for LinkedIn authentication...")
         webbrowser.open(auth_url)
 

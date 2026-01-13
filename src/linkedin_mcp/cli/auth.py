@@ -135,7 +135,8 @@ def cmd_oauth(args: argparse.Namespace) -> int:
     )
 
     # Start authentication
-    if client.authenticate_interactive(timeout=args.timeout):
+    # Pass force_consent=True when --force flag is used to show consent screen
+    if client.authenticate_interactive(timeout=args.timeout, force_consent=args.force):
         # Store token
         token_data = TokenData(
             access_token=client._access_token,
