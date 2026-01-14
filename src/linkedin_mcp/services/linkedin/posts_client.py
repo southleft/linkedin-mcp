@@ -441,18 +441,35 @@ class LinkedInPostsClient:
                         return None
 
                     # Capture ETag from response headers (required for finalization)
+                    # Per LinkedIn docs, uploadedPartIds can be ETags OR signed URL paths
                     etag = response.headers.get("ETag", "").strip('"')
-                    if etag:
-                        uploaded_part_ids.append(etag)
+
+                    # Try to extract the signed path from uploadUrl as fallback
+                    # LinkedIn docs show uploadedPartIds like: /ambry-videoei/signedId/...
+                    upload_url_path = ""
+                    if upload_url:
+                        # Extract path portion from URL (everything after the domain)
+                        from urllib.parse import urlparse
+                        parsed = urlparse(upload_url)
+                        upload_url_path = parsed.path
+                        if parsed.query:
+                            upload_url_path = f"{parsed.path}?{parsed.query}"
+
+                    # Use ETag if available, otherwise use the upload URL path
+                    part_id = etag if etag else upload_url_path
+
+                    if part_id:
+                        uploaded_part_ids.append(part_id)
                         logger.info(
                             "Video chunk uploaded successfully",
                             chunk=i + 1,
                             total=total_chunks,
-                            etag=etag,
+                            part_id=part_id,
+                            source="etag" if etag else "upload_url",
                         )
                     else:
                         logger.warning(
-                            "No ETag in chunk response",
+                            "No ETag or upload URL path for chunk",
                             chunk=i + 1,
                             headers=dict(response.headers),
                         )
@@ -505,6 +522,8 @@ class LinkedInPostsClient:
             "Finalizing video upload",
             video_urn=video_urn,
             part_count=len(uploaded_part_ids),
+            upload_token_length=len(upload_token) if upload_token else 0,
+            first_part_id=uploaded_part_ids[0][:50] if uploaded_part_ids else None,
         )
 
         try:
@@ -784,23 +803,18 @@ class LinkedInPostsClient:
         if uploaded_part_ids is None:
             return {"success": False, "error": "Failed to upload video"}
 
-        # Finalize the video upload if uploadToken is provided
-        # Small files (single-chunk) get uploadToken; large files (multi-chunk) may not
-        finalized = False
-        if upload_token:
-            finalized = self._finalize_video_upload(upload_token, uploaded_part_ids, video_urn)
-            if not finalized:
-                logger.warning(
-                    "Video finalization failed, video may not appear in feed",
-                    video_urn=video_urn,
-                )
-        else:
-            # Large multi-part uploads may not receive uploadToken
-            # Video might still work but finalization couldn't be confirmed
-            logger.info(
-                "No uploadToken provided by LinkedIn, skipping finalization",
+        # Finalize the video upload - ALWAYS call this per LinkedIn docs
+        # uploadToken can be empty string "" and finalization is still required
+        finalized = self._finalize_video_upload(
+            upload_token or "",  # Use empty string if None per LinkedIn docs
+            uploaded_part_ids,
+            video_urn,
+        )
+        if not finalized:
+            logger.warning(
+                "Video finalization failed, video may not appear in feed",
                 video_urn=video_urn,
-                file_size_mb=file_size / 1024 / 1024,
+                upload_token_provided=bool(upload_token),
             )
 
         # Wait a moment for video processing to start
