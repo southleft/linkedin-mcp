@@ -40,6 +40,29 @@ class MediaType(str, Enum):
     DOCUMENT = "DOCUMENT"
 
 
+class ReactionType(str, Enum):
+    """
+    LinkedIn reaction types for posts and comments.
+
+    Maps to the UI labels:
+    - LIKE = "Like" (thumbs up)
+    - PRAISE = "Celebrate" (clapping hands)
+    - EMPATHY = "Love" (heart)
+    - INTEREST = "Insightful" (lightbulb)
+    - APPRECIATION = "Support" (hands together)
+    - ENTERTAINMENT = "Funny" (laughing face)
+
+    Note: MAYBE is deprecated since API version 202307.
+    """
+
+    LIKE = "LIKE"
+    PRAISE = "PRAISE"  # Celebrate
+    EMPATHY = "EMPATHY"  # Love
+    INTEREST = "INTEREST"  # Insightful
+    APPRECIATION = "APPRECIATION"  # Support
+    ENTERTAINMENT = "ENTERTAINMENT"  # Funny
+
+
 def escape_little_text(text: str, preserve_hashtags: bool = True) -> str:
     """
     Escape reserved characters for LinkedIn's 'little text' format.
@@ -330,6 +353,185 @@ class LinkedInPostsClient:
             logger.error("Error uploading media", error=str(e))
             return False
 
+    def _upload_video_chunked(
+        self,
+        upload_instructions: list[dict],
+        file_path: Path,
+    ) -> list[str] | None:
+        """
+        Upload video file using chunked/multi-part upload.
+
+        LinkedIn's video API requires chunked uploads for larger files.
+        Each chunk is uploaded to a separate URL with specific byte ranges.
+        The ETag from each chunk response is required for finalization.
+
+        Args:
+            upload_instructions: List of upload instructions from initializeUpload response.
+                Each instruction contains: firstByte, lastByte, uploadUrl
+            file_path: Path to the video file to upload
+
+        Returns:
+            List of ETags from each chunk upload (required for finalization),
+            or None if upload failed
+        """
+        if not file_path.exists():
+            logger.error("Video file not found", path=str(file_path))
+            return None
+
+        file_size = file_path.stat().st_size
+
+        # Determine content type
+        suffix = file_path.suffix.lower()
+        content_type = "video/mp4" if suffix == ".mp4" else "video/quicktime"
+
+        total_chunks = len(upload_instructions)
+        uploaded_part_ids: list[str] = []
+
+        logger.info(
+            "Starting chunked video upload",
+            path=str(file_path),
+            file_size_mb=file_size / 1024 / 1024,
+            total_chunks=total_chunks,
+        )
+
+        try:
+            with open(file_path, "rb") as f:
+                for i, instruction in enumerate(upload_instructions):
+                    first_byte = instruction.get("firstByte", 0)
+                    last_byte = instruction.get("lastByte", file_size - 1)
+                    upload_url = instruction.get("uploadUrl")
+
+                    if not upload_url:
+                        logger.error("Missing uploadUrl in instruction", chunk=i + 1)
+                        return None
+
+                    # Calculate chunk size
+                    chunk_size = last_byte - first_byte + 1
+
+                    # Seek to the correct position and read the chunk
+                    f.seek(first_byte)
+                    chunk_data = f.read(chunk_size)
+
+                    logger.info(
+                        "Uploading video chunk",
+                        chunk=i + 1,
+                        total=total_chunks,
+                        first_byte=first_byte,
+                        last_byte=last_byte,
+                        chunk_size_mb=chunk_size / 1024 / 1024,
+                    )
+
+                    # Upload this chunk
+                    response = self._session.put(
+                        upload_url,
+                        headers={
+                            "Authorization": f"Bearer {self.access_token}",
+                            "Content-Type": content_type,
+                        },
+                        data=chunk_data,
+                    )
+
+                    if response.status_code not in (200, 201):
+                        logger.error(
+                            "Failed to upload video chunk",
+                            chunk=i + 1,
+                            status=response.status_code,
+                            error=response.text[:500],
+                        )
+                        return None
+
+                    # Capture ETag from response headers (required for finalization)
+                    etag = response.headers.get("ETag", "").strip('"')
+                    if etag:
+                        uploaded_part_ids.append(etag)
+                        logger.info(
+                            "Video chunk uploaded successfully",
+                            chunk=i + 1,
+                            total=total_chunks,
+                            etag=etag,
+                        )
+                    else:
+                        logger.warning(
+                            "No ETag in chunk response",
+                            chunk=i + 1,
+                            headers=dict(response.headers),
+                        )
+                        # Still add empty string to maintain order
+                        uploaded_part_ids.append("")
+
+            logger.info(
+                "All video chunks uploaded successfully",
+                total_chunks=total_chunks,
+                file_size_mb=file_size / 1024 / 1024,
+                etag_count=len([e for e in uploaded_part_ids if e]),
+            )
+            return uploaded_part_ids
+
+        except Exception as e:
+            logger.error("Error during chunked video upload", error=str(e))
+            return None
+
+    def _finalize_video_upload(
+        self,
+        upload_token: str,
+        uploaded_part_ids: list[str],
+        video_urn: str,
+    ) -> bool:
+        """
+        Finalize video upload after all chunks have been uploaded.
+
+        LinkedIn requires this finalization step before the video can be used
+        in a post. Without it, the video won't appear in the feed.
+
+        Args:
+            upload_token: Token from initializeUpload response
+            uploaded_part_ids: List of ETags from each chunk upload
+            video_urn: The video URN from initializeUpload response
+
+        Returns:
+            True if finalization successful, False otherwise
+        """
+        endpoint = f"{self.API_BASE}/rest/videos?action=finalizeUpload"
+
+        payload = {
+            "finalizeUploadRequest": {
+                "uploadToken": upload_token,
+                "uploadedPartIds": uploaded_part_ids,
+                "video": video_urn,
+            }
+        }
+
+        logger.info(
+            "Finalizing video upload",
+            video_urn=video_urn,
+            part_count=len(uploaded_part_ids),
+        )
+
+        try:
+            response = self._session.post(
+                endpoint,
+                headers=self._get_headers(),
+                json=payload,
+            )
+
+            if response.ok:
+                logger.info(
+                    "Video upload finalized successfully",
+                    video_urn=video_urn,
+                )
+                return True
+            else:
+                logger.error(
+                    "Failed to finalize video upload",
+                    status=response.status_code,
+                    error=response.text[:500],
+                )
+                return False
+
+        except Exception as e:
+            logger.error("Error finalizing video upload", error=str(e))
+            return False
+
     def create_image_post(
         self,
         text: str,
@@ -511,6 +713,282 @@ class LinkedInPostsClient:
 
         except Exception as e:
             logger.error("Error creating poll", error=str(e))
+            return {"success": False, "error": str(e)}
+
+    def create_video_post(
+        self,
+        text: str,
+        video_path: Path,
+        title: Optional[str] = None,
+        visibility: PostVisibility = PostVisibility.PUBLIC,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Create a post with a video.
+
+        LinkedIn supports video uploads up to 10 minutes for most users,
+        up to 15 minutes for some accounts.
+
+        Supported formats: MP4 (recommended), MOV
+        Recommended specs: 1080p, H.264 codec, AAC audio, 30fps
+
+        Args:
+            text: Post text content
+            video_path: Path to video file
+            title: Optional title for the video
+            visibility: Post visibility
+
+        Returns:
+            Post data if successful, None otherwise
+        """
+        video_path = Path(video_path)
+        if not video_path.exists():
+            return {"success": False, "error": f"Video file not found: {video_path}"}
+
+        # Get file size for upload initialization
+        file_size = video_path.stat().st_size
+
+        # LinkedIn limits: 200MB for most videos, up to 5GB for some accounts
+        max_size = 200 * 1024 * 1024  # 200MB
+        if file_size > max_size:
+            return {
+                "success": False,
+                "error": f"Video file too large ({file_size / 1024 / 1024:.1f}MB). Maximum is 200MB.",
+            }
+
+        # Initialize upload with file size
+        upload_data = self._initialize_upload(MediaType.VIDEO, file_size=file_size)
+        if not upload_data:
+            return {"success": False, "error": "Failed to initialize video upload"}
+
+        # Video API returns uploadInstructions array for chunked uploads
+        upload_instructions = upload_data.get("uploadInstructions", [])
+        video_urn = upload_data.get("video")
+        upload_token = upload_data.get("uploadToken")
+
+        if not upload_instructions or not video_urn:
+            logger.error("Invalid video upload response", upload_data=upload_data)
+            return {"success": False, "error": "Invalid upload response - missing uploadInstructions or video URN"}
+
+        logger.info(
+            "Uploading video",
+            path=str(video_path),
+            size_mb=file_size / 1024 / 1024,
+            video_urn=video_urn,
+            chunks=len(upload_instructions),
+            has_upload_token=bool(upload_token),
+        )
+
+        # Upload the video using chunked upload (handles both single and multi-part)
+        # Returns list of ETags required for finalization
+        uploaded_part_ids = self._upload_video_chunked(upload_instructions, video_path)
+        if uploaded_part_ids is None:
+            return {"success": False, "error": "Failed to upload video"}
+
+        # Finalize the video upload if uploadToken is provided
+        # Small files (single-chunk) get uploadToken; large files (multi-chunk) may not
+        finalized = False
+        if upload_token:
+            finalized = self._finalize_video_upload(upload_token, uploaded_part_ids, video_urn)
+            if not finalized:
+                logger.warning(
+                    "Video finalization failed, video may not appear in feed",
+                    video_urn=video_urn,
+                )
+        else:
+            # Large multi-part uploads may not receive uploadToken
+            # Video might still work but finalization couldn't be confirmed
+            logger.info(
+                "No uploadToken provided by LinkedIn, skipping finalization",
+                video_urn=video_urn,
+                file_size_mb=file_size / 1024 / 1024,
+            )
+
+        # Wait a moment for video processing to start
+        time.sleep(2)
+
+        # Create the post with the video
+        escaped_text = escape_little_text(text[:3000]) if text else ""
+
+        payload = {
+            "author": self.member_urn,
+            "commentary": escaped_text,
+            "visibility": visibility.value,
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
+            },
+            "content": {
+                "media": {
+                    "id": video_urn,
+                    "title": title or "",
+                }
+            },
+            "lifecycleState": "PUBLISHED",
+            "isReshareDisabledByAuthor": False,
+        }
+
+        try:
+            response = self._session.post(
+                f"{self.API_BASE}/rest/posts",
+                headers=self._get_headers(),
+                json=payload,
+            )
+
+            if response.status_code == 201:
+                post_urn = response.headers.get("x-restli-id", "")
+                logger.info("Created video post", post_urn=post_urn, video_urn=video_urn, finalized=finalized)
+                return {
+                    "success": True,
+                    "post_urn": post_urn,
+                    "video_urn": video_urn,
+                    "visibility": visibility.value,
+                    "file_size_mb": round(file_size / 1024 / 1024, 2),
+                    "finalized": finalized,
+                    "note": "Video may take a few minutes to process before it appears in the feed.",
+                }
+            else:
+                logger.error(
+                    "Failed to create video post",
+                    status=response.status_code,
+                    error=response.text[:500],
+                )
+                return {
+                    "success": False,
+                    "error": response.text[:500],
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error creating video post", error=str(e))
+            return {"success": False, "error": str(e)}
+
+    def create_document_post(
+        self,
+        text: str,
+        document_path: Path,
+        title: Optional[str] = None,
+        visibility: PostVisibility = PostVisibility.PUBLIC,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Create a post with a document (PDF, PPTX, DOCX).
+
+        Documents appear as carousel-style slideshows in the LinkedIn feed.
+        Great for sharing presentations, guides, reports, etc.
+
+        Supported formats: PDF (recommended), PPTX, DOCX
+        Maximum size: 100MB
+
+        Args:
+            text: Post text content
+            document_path: Path to document file
+            title: Optional title for the document
+            visibility: Post visibility
+
+        Returns:
+            Post data if successful, None otherwise
+        """
+        document_path = Path(document_path)
+        if not document_path.exists():
+            return {"success": False, "error": f"Document file not found: {document_path}"}
+
+        # Validate file type
+        valid_extensions = {".pdf", ".pptx", ".docx"}
+        if document_path.suffix.lower() not in valid_extensions:
+            return {
+                "success": False,
+                "error": f"Invalid document type '{document_path.suffix}'. Supported: PDF, PPTX, DOCX",
+            }
+
+        file_size = document_path.stat().st_size
+
+        # LinkedIn limit: 100MB for documents
+        max_size = 100 * 1024 * 1024  # 100MB
+        if file_size > max_size:
+            return {
+                "success": False,
+                "error": f"Document file too large ({file_size / 1024 / 1024:.1f}MB). Maximum is 100MB.",
+            }
+
+        # Initialize upload
+        upload_data = self._initialize_upload(MediaType.DOCUMENT)
+        if not upload_data:
+            return {"success": False, "error": "Failed to initialize document upload"}
+
+        upload_url = upload_data.get("uploadUrl")
+        document_urn = upload_data.get("document")
+
+        if not upload_url or not document_urn:
+            return {"success": False, "error": "Invalid upload response"}
+
+        logger.info(
+            "Uploading document",
+            path=str(document_path),
+            size_mb=file_size / 1024 / 1024,
+            document_urn=document_urn,
+        )
+
+        # Upload the document
+        if not self._upload_media(upload_url, document_path):
+            return {"success": False, "error": "Failed to upload document"}
+
+        # Create the post with the document
+        escaped_text = escape_little_text(text[:3000]) if text else ""
+
+        # Use the filename as title if not provided
+        doc_title = title or document_path.stem.replace("_", " ").replace("-", " ")
+
+        payload = {
+            "author": self.member_urn,
+            "commentary": escaped_text,
+            "visibility": visibility.value,
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
+            },
+            "content": {
+                "media": {
+                    "id": document_urn,
+                    "title": doc_title,
+                }
+            },
+            "lifecycleState": "PUBLISHED",
+            "isReshareDisabledByAuthor": False,
+        }
+
+        try:
+            response = self._session.post(
+                f"{self.API_BASE}/rest/posts",
+                headers=self._get_headers(),
+                json=payload,
+            )
+
+            if response.status_code == 201:
+                post_urn = response.headers.get("x-restli-id", "")
+                logger.info("Created document post", post_urn=post_urn, document_urn=document_urn)
+                return {
+                    "success": True,
+                    "post_urn": post_urn,
+                    "document_urn": document_urn,
+                    "title": doc_title,
+                    "visibility": visibility.value,
+                    "file_size_mb": round(file_size / 1024 / 1024, 2),
+                }
+            else:
+                logger.error(
+                    "Failed to create document post",
+                    status=response.status_code,
+                    error=response.text[:500],
+                )
+                return {
+                    "success": False,
+                    "error": response.text[:500],
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error creating document post", error=str(e))
             return {"success": False, "error": str(e)}
 
     def delete_post(self, post_urn: str) -> dict[str, Any]:
@@ -765,6 +1243,359 @@ class LinkedInPostsClient:
             logger.error("Error creating comment", error=str(e), post_urn=post_urn)
             return {"success": False, "error": str(e)}
 
+    def delete_comment(
+        self,
+        post_urn: str,
+        comment_id: str,
+    ) -> dict[str, Any]:
+        """
+        Delete a comment from a post.
+
+        Requires Community Management API access (w_member_social_feed scope).
+
+        Args:
+            post_urn: The URN of the post containing the comment
+            comment_id: The ID or URN of the comment to delete
+
+        Returns:
+            Result dict with success status
+        """
+        try:
+            # Normalize post URN to activity format
+            if post_urn.startswith("urn:li:share:"):
+                share_id = post_urn.split(":")[-1]
+                activity_urn = f"urn:li:activity:{share_id}"
+            elif post_urn.startswith("urn:li:activity:"):
+                activity_urn = post_urn
+            elif post_urn.startswith("urn:li:ugcPost:"):
+                activity_urn = post_urn
+            else:
+                activity_urn = post_urn
+
+            # Extract comment ID if full URN provided
+            # Comment URN format: urn:li:comment:(urn:li:activity:123,456)
+            if comment_id.startswith("urn:li:comment:"):
+                # Extract just the numeric ID
+                import re
+                match = re.search(r",(\d+)\)$", comment_id)
+                if match:
+                    comment_id = match.group(1)
+                else:
+                    # Try to use as-is
+                    pass
+
+            # Build the endpoint URL
+            encoded_urn = requests.utils.quote(activity_urn, safe="")
+            endpoint = f"{self.API_BASE}/rest/socialActions/{encoded_urn}/comments/{comment_id}"
+
+            logger.info(
+                "Deleting comment",
+                post_urn=post_urn,
+                comment_id=comment_id,
+            )
+
+            response = self._session.delete(
+                endpoint,
+                headers=self._get_headers(),
+            )
+
+            if response.status_code in (200, 204):
+                logger.info("Deleted comment", comment_id=comment_id, post_urn=post_urn)
+                return {
+                    "success": True,
+                    "comment_id": comment_id,
+                    "post_urn": post_urn,
+                }
+            elif response.status_code == 403:
+                error_text = response.text[:500]
+                if "PERMISSION" in error_text.upper() or "partnerApiSocialActions" in error_text:
+                    return {
+                        "success": False,
+                        "error": "Deleting comments requires the 'Community Management API' product.",
+                        "details": "Request access in LinkedIn Developer Portal → Products → Community Management API",
+                        "status_code": 403,
+                    }
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": 403,
+                }
+            elif response.status_code == 404:
+                return {
+                    "success": False,
+                    "error": "Comment not found",
+                    "status_code": 404,
+                }
+            else:
+                error_text = response.text[:500]
+                logger.error(
+                    "Failed to delete comment",
+                    status=response.status_code,
+                    error=error_text,
+                )
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error deleting comment", error=str(e))
+            return {"success": False, "error": str(e)}
+
+    def create_reaction(
+        self,
+        target_urn: str,
+        reaction_type: ReactionType | str = ReactionType.LIKE,
+    ) -> dict[str, Any]:
+        """
+        Add a reaction to a post or comment.
+
+        Requires Community Management API access (w_member_social_feed scope).
+
+        Args:
+            target_urn: The URN of the post or comment to react to
+                       (e.g., "urn:li:share:123", "urn:li:activity:123",
+                        "urn:li:comment:(urn:li:activity:123,456)")
+            reaction_type: Type of reaction to add. Options:
+                - LIKE (👍 Like)
+                - PRAISE (👏 Celebrate)
+                - EMPATHY (❤️ Love)
+                - INTEREST (💡 Insightful)
+                - APPRECIATION (🙏 Support)
+                - ENTERTAINMENT (😄 Funny)
+
+        Returns:
+            Result dict with success status and reaction details
+        """
+        try:
+            # Normalize reaction type
+            if isinstance(reaction_type, str):
+                reaction_type = reaction_type.upper()
+                # Handle UI names
+                reaction_map = {
+                    "CELEBRATE": "PRAISE",
+                    "LOVE": "EMPATHY",
+                    "INSIGHTFUL": "INTEREST",
+                    "SUPPORT": "APPRECIATION",
+                    "FUNNY": "ENTERTAINMENT",
+                }
+                reaction_type = reaction_map.get(reaction_type, reaction_type)
+            else:
+                reaction_type = reaction_type.value
+
+            # Validate reaction type
+            valid_reactions = ["LIKE", "PRAISE", "EMPATHY", "INTEREST", "APPRECIATION", "ENTERTAINMENT"]
+            if reaction_type not in valid_reactions:
+                return {
+                    "success": False,
+                    "error": f"Invalid reaction type '{reaction_type}'. Valid types: {', '.join(valid_reactions)}",
+                }
+
+            # Normalize target URN - convert share to activity if needed
+            if target_urn.startswith("urn:li:share:"):
+                share_id = target_urn.split(":")[-1]
+                root_urn = f"urn:li:activity:{share_id}"
+            elif target_urn.startswith("urn:li:activity:"):
+                root_urn = target_urn
+            elif target_urn.startswith("urn:li:ugcPost:"):
+                root_urn = target_urn
+            elif target_urn.startswith("urn:li:comment:"):
+                root_urn = target_urn
+            else:
+                root_urn = target_urn
+
+            # Build the endpoint - actor parameter is URL-encoded member URN
+            encoded_actor = requests.utils.quote(self.member_urn, safe="")
+            endpoint = f"{self.API_BASE}/rest/reactions?actor={encoded_actor}"
+
+            # Build payload
+            payload = {
+                "root": root_urn,
+                "reactionType": reaction_type,
+            }
+
+            logger.info(
+                "Creating reaction",
+                target_urn=target_urn,
+                root_urn=root_urn,
+                reaction_type=reaction_type,
+            )
+
+            response = self._session.post(
+                endpoint,
+                headers=self._get_headers(),
+                json=payload,
+            )
+
+            if response.status_code == 201:
+                # Parse the response for the reaction ID
+                try:
+                    result_data = response.json()
+                    reaction_id = result_data.get("id", "")
+                except Exception:
+                    reaction_id = response.headers.get("x-restli-id", "")
+
+                logger.info(
+                    "Created reaction",
+                    reaction_id=reaction_id,
+                    reaction_type=reaction_type,
+                    target_urn=target_urn,
+                )
+                return {
+                    "success": True,
+                    "reaction_id": reaction_id,
+                    "reaction_type": reaction_type,
+                    "target_urn": target_urn,
+                }
+            elif response.status_code == 409:
+                # Already reacted - this is technically success
+                logger.info("Already reacted to this content", target_urn=target_urn)
+                return {
+                    "success": True,
+                    "already_reacted": True,
+                    "reaction_type": reaction_type,
+                    "target_urn": target_urn,
+                }
+            elif response.status_code == 403:
+                error_text = response.text[:500]
+                if "PERMISSION" in error_text.upper() or "w_member_social_feed" in error_text:
+                    return {
+                        "success": False,
+                        "error": "Reactions require the 'Community Management API' product (w_member_social_feed scope).",
+                        "details": "Request access in LinkedIn Developer Portal → Products → Community Management API",
+                        "status_code": 403,
+                    }
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": 403,
+                }
+            elif response.status_code == 400:
+                error_text = response.text[:500]
+                if "MAYBE" in error_text:
+                    return {
+                        "success": False,
+                        "error": "The MAYBE reaction type is deprecated. Use LIKE, PRAISE, EMPATHY, INTEREST, APPRECIATION, or ENTERTAINMENT.",
+                        "status_code": 400,
+                    }
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": 400,
+                }
+            else:
+                error_text = response.text[:500]
+                logger.error(
+                    "Failed to create reaction",
+                    status=response.status_code,
+                    error=error_text,
+                )
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error creating reaction", error=str(e))
+            return {"success": False, "error": str(e)}
+
+    def delete_reaction(
+        self,
+        target_urn: str,
+    ) -> dict[str, Any]:
+        """
+        Remove a reaction from a post or comment.
+
+        Requires Community Management API access (w_member_social_feed scope).
+
+        Args:
+            target_urn: The URN of the post or comment to remove the reaction from
+                       (e.g., "urn:li:share:123", "urn:li:activity:123")
+
+        Returns:
+            Result dict with success status
+        """
+        try:
+            # Normalize target URN
+            if target_urn.startswith("urn:li:share:"):
+                share_id = target_urn.split(":")[-1]
+                root_urn = f"urn:li:activity:{share_id}"
+            elif target_urn.startswith("urn:li:activity:"):
+                root_urn = target_urn
+            elif target_urn.startswith("urn:li:ugcPost:"):
+                root_urn = target_urn
+            elif target_urn.startswith("urn:li:comment:"):
+                root_urn = target_urn
+            else:
+                root_urn = target_urn
+
+            # Build the reaction key for deletion
+            # LinkedIn REST API uses compound keys with special encoding
+            # Format: (actor:{encoded_actor},entity:{encoded_entity})
+            encoded_actor = requests.utils.quote(self.member_urn, safe="")
+            encoded_entity = requests.utils.quote(root_urn, safe="")
+
+            # Use the compound key format for REST API
+            compound_key = f"(actor:{encoded_actor},entity:{encoded_entity})"
+
+            endpoint = f"{self.API_BASE}/rest/reactions/{compound_key}"
+
+            logger.info(
+                "Deleting reaction",
+                target_urn=target_urn,
+                compound_key=compound_key,
+            )
+
+            response = self._session.delete(
+                endpoint,
+                headers=self._get_headers(),
+            )
+
+            if response.status_code in (200, 204):
+                logger.info("Deleted reaction", target_urn=target_urn)
+                return {
+                    "success": True,
+                    "target_urn": target_urn,
+                }
+            elif response.status_code == 404:
+                # No reaction to delete - still success
+                return {
+                    "success": True,
+                    "no_reaction": True,
+                    "target_urn": target_urn,
+                }
+            elif response.status_code == 403:
+                error_text = response.text[:500]
+                if "PERMISSION" in error_text.upper():
+                    return {
+                        "success": False,
+                        "error": "Deleting reactions requires the 'Community Management API' product.",
+                        "status_code": 403,
+                    }
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": 403,
+                }
+            else:
+                error_text = response.text[:500]
+                logger.error(
+                    "Failed to delete reaction",
+                    status=response.status_code,
+                    error=error_text,
+                )
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error deleting reaction", error=str(e))
+            return {"success": False, "error": str(e)}
+
     def debug_context(self) -> dict[str, Any]:
         """
         Get debug information about the Posts client.
@@ -779,11 +1610,22 @@ class LinkedInPostsClient:
             "available_features": [
                 "create_text_post",
                 "create_image_post",
+                "create_video_post",
+                "create_document_post",
                 "create_poll",
                 "create_comment",
+                "delete_comment",
+                "create_reaction",
+                "delete_reaction",
                 "delete_post",
                 "get_post",
             ],
-            "required_scope": "w_member_social",
-            "required_product": "Share on LinkedIn",
+            "required_scopes": {
+                "posts": "w_member_social",
+                "comments_reactions": "w_member_social_feed",
+            },
+            "required_products": {
+                "posts": "Share on LinkedIn",
+                "comments_reactions": "Community Management API",
+            },
         }
