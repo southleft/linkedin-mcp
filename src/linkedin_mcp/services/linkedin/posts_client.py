@@ -1085,19 +1085,38 @@ class LinkedInPostsClient:
             not in top-level comments directly on posts.
         """
         try:
-            # Normalize post URN - handle both share and activity formats
-            # The API expects urn:li:activity format for the socialActions endpoint
-            if post_urn.startswith("urn:li:share:"):
-                # Convert share URN to activity URN format
-                share_id = post_urn.split(":")[-1]
-                activity_urn = f"urn:li:activity:{share_id}"
-            elif post_urn.startswith("urn:li:activity:"):
-                activity_urn = post_urn
-            elif post_urn.startswith("urn:li:ugcPost:"):
-                activity_urn = post_urn
-            else:
-                # Try to use as-is
-                activity_urn = post_urn
+            # The socialActions API accepts share, ugcPost, or activity URNs directly
+            # Do NOT convert between URN types - the IDs are different
+            # Path format: /rest/socialActions/{shareUrn|ugcPostUrn|commentUrn}/comments
+            social_action_urn = post_urn
+
+            # CRITICAL: For nested replies (when parent_comment_urn is provided),
+            # we must use the ACTIVITY URN embedded in the comment URN, not the post URN.
+            # Comment URN format: urn:li:comment:(urn:li:activity:XXXXX,YYYYY)
+            # We need to extract: urn:li:activity:XXXXX
+            if parent_comment_urn and parent_comment_urn.startswith("urn:li:comment:("):
+                import re
+                # Extract activity URN from comment URN
+                match = re.search(r"urn:li:comment:\((urn:li:activity:\d+),", parent_comment_urn)
+                if match:
+                    activity_urn = match.group(1)
+                    logger.info(
+                        "Extracted activity URN for nested reply",
+                        parent_comment_urn=parent_comment_urn,
+                        activity_urn=activity_urn,
+                    )
+                    social_action_urn = activity_urn
+                else:
+                    logger.warning(
+                        "Could not extract activity URN from parent comment URN",
+                        parent_comment_urn=parent_comment_urn,
+                    )
+
+            # Validate URN format
+            valid_prefixes = ("urn:li:share:", "urn:li:ugcPost:", "urn:li:activity:")
+            if not social_action_urn.startswith(valid_prefixes):
+                logger.warning("Unexpected URN format for comment", post_urn=social_action_urn)
+                # Try to use as-is anyway
 
             # Handle image upload if provided
             image_urn = None
@@ -1130,13 +1149,13 @@ class LinkedInPostsClient:
                 logger.info("Uploaded comment image", image_urn=image_urn)
 
             # Build the endpoint URL
-            encoded_urn = requests.utils.quote(activity_urn, safe="")
+            encoded_urn = requests.utils.quote(social_action_urn, safe="")
             endpoint = f"{self.API_BASE}/rest/socialActions/{encoded_urn}/comments"
 
             # Build the request payload
             payload = {
                 "actor": self.member_urn,
-                "object": activity_urn,
+                "object": social_action_urn,
                 "message": {
                     "text": text[:1250] if text else "",  # LinkedIn comment limit
                 },
@@ -1153,7 +1172,7 @@ class LinkedInPostsClient:
             logger.info(
                 "Creating comment",
                 post_urn=post_urn,
-                activity_urn=activity_urn,
+                endpoint_urn=social_action_urn,
                 has_parent=bool(parent_comment_urn),
                 has_image=bool(image_urn),
             )
@@ -1243,6 +1262,163 @@ class LinkedInPostsClient:
             logger.error("Error creating comment", error=str(e), post_urn=post_urn)
             return {"success": False, "error": str(e)}
 
+    def get_post_comments(
+        self,
+        post_urn: str,
+        start: int = 0,
+        count: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Get comments on a post via the Official LinkedIn API.
+
+        Requires Community Management API access (w_member_social_feed scope).
+
+        Args:
+            post_urn: The URN of the post (e.g., "urn:li:share:123" or "urn:li:ugcPost:123")
+            start: Pagination start index (default: 0)
+            count: Number of comments to return (default: 50, max: 100)
+
+        Returns:
+            Dict containing:
+                - success: Boolean indicating success
+                - comments: List of comment objects with URN, author, text, etc.
+                - paging: Pagination info (start, count, total)
+                - error: Error message if failed
+        """
+        try:
+            # Use original URN directly - do NOT convert between URN types
+            social_action_urn = post_urn
+
+            # Build the endpoint URL with pagination
+            encoded_urn = requests.utils.quote(social_action_urn, safe="")
+            endpoint = f"{self.API_BASE}/rest/socialActions/{encoded_urn}/comments"
+
+            params = {
+                "start": start,
+                "count": min(count, 100),  # Cap at 100
+            }
+
+            logger.info(
+                "Fetching comments via official API",
+                post_urn=post_urn,
+                start=start,
+                count=count,
+            )
+
+            response = self._session.get(
+                endpoint,
+                headers=self._get_headers(),
+                params=params,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                elements = data.get("elements", [])
+
+                # Normalize comments for easier consumption
+                comments = []
+                for element in elements:
+                    # Extract actor info
+                    actor_urn = element.get("actor", "")
+                    actor_name = None
+
+                    # Try to get actor name from nested object if available
+                    actor_obj = element.get("actorInfo", {})
+                    if actor_obj:
+                        actor_name = actor_obj.get("name")
+
+                    # Extract comment ID and full URN
+                    # LinkedIn returns both 'id' (numeric) and 'commentUrn' (full compound URN)
+                    # The commentUrn is needed for nested replies
+                    comment_id = element.get("id") or element.get("$URN", "")
+                    # Use the full commentUrn for replies - format: urn:li:comment:(urn:li:activity:XXX,YYY)
+                    comment_urn = element.get("commentUrn", "")
+                    if not comment_urn:
+                        # Fallback to constructing a simple URN (won't work for nested replies)
+                        comment_urn = f"urn:li:comment:{comment_id}" if comment_id else ""
+
+                    # Extract message text
+                    message = element.get("message", {})
+                    text = message.get("text", "") if isinstance(message, dict) else str(message)
+
+                    # Extract parent comment if this is a reply
+                    parent_comment = element.get("parentComment")
+
+                    comment = {
+                        "id": comment_id,
+                        "urn": comment_urn,  # Full URN for use with create_comment parent_comment_urn
+                        "actor_urn": actor_urn,
+                        "actor_name": actor_name,
+                        "text": text,
+                        "parent_comment": parent_comment,
+                        "created_at": element.get("createdAt") or element.get("created", {}).get("time"),
+                        "content": element.get("content", []),
+                        "_raw": element,  # Include raw data for debugging
+                    }
+                    comments.append(comment)
+
+                logger.info(
+                    "Retrieved comments via official API",
+                    post_urn=post_urn,
+                    comment_count=len(comments),
+                )
+
+                return {
+                    "success": True,
+                    "comments": comments,
+                    "paging": data.get("paging", {"start": start, "count": len(comments)}),
+                    "total": data.get("paging", {}).get("total", len(comments)),
+                }
+
+            elif response.status_code == 403:
+                error_text = response.text[:500]
+                if "PERMISSION" in error_text.upper() or "partnerApiSocialActions" in error_text:
+                    logger.warning(
+                        "Comments retrieval requires Community Management API",
+                        status=response.status_code,
+                    )
+                    return {
+                        "success": False,
+                        "error": "Fetching comments requires the 'Community Management API' product.",
+                        "details": "Request access in LinkedIn Developer Portal → Products → Community Management API",
+                        "status_code": 403,
+                        "comments": [],
+                    }
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": 403,
+                    "comments": [],
+                }
+
+            elif response.status_code == 404:
+                logger.warning("Post not found or no comments", post_urn=post_urn)
+                return {
+                    "success": True,
+                    "comments": [],
+                    "paging": {"start": start, "count": 0},
+                    "total": 0,
+                    "message": "Post not found or has no comments",
+                }
+
+            else:
+                error_text = response.text[:500]
+                logger.error(
+                    "Failed to fetch comments",
+                    status=response.status_code,
+                    error=error_text,
+                )
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": response.status_code,
+                    "comments": [],
+                }
+
+        except Exception as e:
+            logger.error("Error fetching comments", error=str(e), post_urn=post_urn)
+            return {"success": False, "error": str(e), "comments": []}
+
     def delete_comment(
         self,
         post_urn: str,
@@ -1261,16 +1437,9 @@ class LinkedInPostsClient:
             Result dict with success status
         """
         try:
-            # Normalize post URN to activity format
-            if post_urn.startswith("urn:li:share:"):
-                share_id = post_urn.split(":")[-1]
-                activity_urn = f"urn:li:activity:{share_id}"
-            elif post_urn.startswith("urn:li:activity:"):
-                activity_urn = post_urn
-            elif post_urn.startswith("urn:li:ugcPost:"):
-                activity_urn = post_urn
-            else:
-                activity_urn = post_urn
+            # Use original URN directly - do NOT convert between URN types
+            # The socialActions API accepts share, ugcPost, or activity URNs
+            social_action_urn = post_urn
 
             # Extract comment ID if full URN provided
             # Comment URN format: urn:li:comment:(urn:li:activity:123,456)
@@ -1285,7 +1454,7 @@ class LinkedInPostsClient:
                     pass
 
             # Build the endpoint URL
-            encoded_urn = requests.utils.quote(activity_urn, safe="")
+            encoded_urn = requests.utils.quote(social_action_urn, safe="")
             endpoint = f"{self.API_BASE}/rest/socialActions/{encoded_urn}/comments/{comment_id}"
 
             logger.info(
@@ -1392,18 +1561,9 @@ class LinkedInPostsClient:
                     "error": f"Invalid reaction type '{reaction_type}'. Valid types: {', '.join(valid_reactions)}",
                 }
 
-            # Normalize target URN - convert share to activity if needed
-            if target_urn.startswith("urn:li:share:"):
-                share_id = target_urn.split(":")[-1]
-                root_urn = f"urn:li:activity:{share_id}"
-            elif target_urn.startswith("urn:li:activity:"):
-                root_urn = target_urn
-            elif target_urn.startswith("urn:li:ugcPost:"):
-                root_urn = target_urn
-            elif target_urn.startswith("urn:li:comment:"):
-                root_urn = target_urn
-            else:
-                root_urn = target_urn
+            # Use original URN directly - do NOT convert between URN types
+            # The reactions API accepts share, ugcPost, activity, or comment URNs
+            root_urn = target_urn
 
             # Build the endpoint - actor parameter is URL-encoded member URN
             encoded_actor = requests.utils.quote(self.member_urn, safe="")
@@ -1518,18 +1678,9 @@ class LinkedInPostsClient:
             Result dict with success status
         """
         try:
-            # Normalize target URN
-            if target_urn.startswith("urn:li:share:"):
-                share_id = target_urn.split(":")[-1]
-                root_urn = f"urn:li:activity:{share_id}"
-            elif target_urn.startswith("urn:li:activity:"):
-                root_urn = target_urn
-            elif target_urn.startswith("urn:li:ugcPost:"):
-                root_urn = target_urn
-            elif target_urn.startswith("urn:li:comment:"):
-                root_urn = target_urn
-            else:
-                root_urn = target_urn
+            # Use original URN directly - do NOT convert between URN types
+            # The reactions API accepts share, ugcPost, activity, or comment URNs
+            root_urn = target_urn
 
             # Build the reaction key for deletion
             # LinkedIn REST API uses compound keys with special encoding

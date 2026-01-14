@@ -1751,6 +1751,78 @@ async def delete_comment(
 
 
 @mcp.tool()
+async def get_comments_official(
+    post_urn: str,
+    start: int = 0,
+    count: int = 50,
+) -> dict:
+    """
+    Get comments on a LinkedIn post using the Official API.
+
+    Requires "Community Management API" product enabled in your LinkedIn Developer app.
+
+    Args:
+        post_urn: The URN of the post (e.g., "urn:li:share:123456" or "urn:li:ugcPost:123456")
+        start: Pagination start index (default: 0)
+        count: Number of comments to return (default: 50, max: 100)
+
+    Returns list of comments with:
+        - id: Comment ID
+        - urn: Full comment URN (use this as parent_comment_urn to reply)
+        - actor_urn: URN of the comment author
+        - actor_name: Name of the comment author (if available)
+        - text: Comment text content
+        - parent_comment: URN of parent comment if this is a reply
+        - created_at: Timestamp when comment was created
+
+    Use the returned comment URN as parent_comment_urn in create_comment to reply to a comment.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required to fetch comments. Run 'linkedin-mcp-auth oauth' to authenticate.",
+            "hint": "Enable 'Community Management API' product in your LinkedIn Developer app.",
+        }
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.get_post_comments(
+            post_urn=post_urn,
+            start=start,
+            count=count,
+        )
+
+        if result and result.get("success"):
+            comments = result.get("comments", [])
+            logger.info(
+                "Retrieved comments via official API",
+                post_urn=post_urn,
+                comment_count=len(comments),
+            )
+            return {
+                "success": True,
+                "comments": comments,
+                "total": result.get("total", len(comments)),
+                "paging": result.get("paging", {}),
+                "source": "official_api",
+            }
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error"), "comments": []}
+
+    except Exception as e:
+        logger.error("Failed to fetch comments", error=str(e), post_urn=post_urn)
+        return {"error": str(e), "comments": []}
+
+
+@mcp.tool()
 async def create_reaction(
     target_urn: str,
     reaction_type: str = "LIKE",
