@@ -98,25 +98,31 @@ def cmd_oauth(args: argparse.Namespace) -> int:
             return 0
 
     # OAuth scopes for LinkedIn API
-    # Community Management API enabled January 2026
-    # Note: w_member_social includes posts, comments, and reactions per LinkedIn docs
+    # w_member_social = posts only (Share on LinkedIn product)
+    # w_member_social_feed = posts, comments, reactions (Community Management API)
     scopes = [
         # Core OIDC scopes (required)
         "openid",
         "profile",
         "email",
-        # Share on LinkedIn - posts, comments, and reactions
+        # Share on LinkedIn - create and manage posts
         "w_member_social",
     ]
+
+    # Add Community Management scope if enabled
+    if args.community_management:
+        scopes.append("w_member_social_feed")
 
     print("Requesting OAuth 2.0 Authorization with the following scopes:")
     print()
     print("   📋 SCOPES REQUESTED:")
     print("   ─────────────────────────────────────────────────────────")
-    print("   • openid          - OpenID Connect authentication")
-    print("   • profile         - Basic profile information (name, photo)")
-    print("   • email           - Email address")
-    print("   • w_member_social - Create and manage posts")
+    print("   • openid               - OpenID Connect authentication")
+    print("   • profile              - Basic profile information (name, photo)")
+    print("   • email                - Email address")
+    print("   • w_member_social      - Create and manage posts")
+    if args.community_management:
+        print("   • w_member_social_feed - Comments and reactions (Community Mgmt)")
     print("   ─────────────────────────────────────────────────────────")
     print()
     print("A browser window will open for you to authorize these permissions.")
@@ -287,6 +293,12 @@ def main() -> int:
         type=int,
         default=120,
         help="Timeout in seconds for authentication (default: 120)",
+    )
+    oauth_parser.add_argument(
+        "--community-management",
+        "-c",
+        action="store_true",
+        help="Include Community Management API scope (w_member_social_feed) for comments/reactions",
     )
     oauth_parser.set_defaults(func=cmd_oauth)
 

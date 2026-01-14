@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
     from linkedin_mcp.config.settings import Settings
+    from linkedin_mcp.services.linkedin.ad_library_client import LinkedInAdLibraryClient
     from linkedin_mcp.services.linkedin.data_provider import LinkedInDataProvider
     from linkedin_mcp.services.linkedin.fresh_data_client import FreshLinkedInDataClient
     from linkedin_mcp.services.linkedin.marketing_client import LinkedInMarketingClient
@@ -52,6 +53,9 @@ class AppContext:
 
     # LinkedIn Marketing API client (Community Management) - Official, for org lookup
     marketing_client: "LinkedInMarketingClient | None" = None
+
+    # LinkedIn Ad Library API client - Official, for ad transparency/research
+    ad_library_client: "LinkedInAdLibraryClient | None" = None
 
     # Fresh LinkedIn Data API client (RapidAPI) - Third-party, for search (FALLBACK)
     fresh_data_client: "FreshLinkedInDataClient | None" = None
@@ -103,6 +107,11 @@ class AppContext:
     def has_marketing_client(self) -> bool:
         """Check if LinkedIn Marketing API client (Community Management) is available."""
         return self.marketing_client is not None
+
+    @property
+    def has_ad_library_client(self) -> bool:
+        """Check if LinkedIn Ad Library API client is available."""
+        return self.ad_library_client is not None
 
     @property
     def has_fresh_data_client(self) -> bool:

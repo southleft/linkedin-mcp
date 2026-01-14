@@ -1181,6 +1181,252 @@ async def create_image_post(text: str, image_path: str, alt_text: str | None = N
 
 
 @mcp.tool()
+async def create_video_post(text: str, video_path: str, title: str | None = None, visibility: str = "PUBLIC") -> dict:
+    """
+    Create a LinkedIn post with a video using the Official API.
+
+    Requires "Share on LinkedIn" product enabled in your LinkedIn Developer app.
+
+    LinkedIn supports video uploads up to 10 minutes for most users.
+    Supported formats: MP4 (recommended), MOV
+    Maximum file size: 200MB
+    Recommended specs: 1080p, H.264 codec, AAC audio, 30fps
+
+    Args:
+        text: Post text content (max 3000 characters)
+        video_path: Video source - can be:
+            - Absolute path to local file (MP4, MOV)
+            - URL to video (http:// or https://)
+        title: Optional title for the video
+        visibility: Post visibility - PUBLIC or CONNECTIONS
+
+    Returns the created post details including post URN and video URN.
+    Note: Video may take a few minutes to process before appearing in the feed.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import httpx
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient, PostVisibility
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    valid_extensions = (".mp4", ".mov")
+    temp_file = None
+    video_file = None
+
+    try:
+        # Detect input type and resolve to a file path
+        if video_path.startswith(("http://", "https://")):
+            # URL input - download to temp file
+            logger.info("Downloading video from URL", url=video_path[:100])
+            try:
+                async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+                    response = await client.get(video_path)
+                    response.raise_for_status()
+
+                    # Determine file extension from content-type or URL
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "quicktime" in content_type or "mov" in content_type:
+                        ext = ".mov"
+                    else:
+                        ext = ".mp4"
+
+                    # Save to temp file
+                    temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                    temp_file.write(response.content)
+                    temp_file.close()
+                    video_file = Path(temp_file.name)
+                    logger.info("Downloaded video to temp file", path=str(video_file), size_mb=len(response.content) / 1024 / 1024)
+
+            except httpx.HTTPError as e:
+                return {"error": f"Failed to download video from URL: {str(e)}"}
+
+        else:
+            # Local file path
+            video_file = Path(video_path)
+            if not video_file.exists():
+                return {
+                    "error": f"Video file not found: {video_path}",
+                    "hint": "You can also provide a URL (http/https) to download the video.",
+                }
+
+        # Validate file extension
+        if video_file.suffix.lower() not in valid_extensions:
+            return {"error": f"Invalid video format. Supported: {', '.join(valid_extensions)}"}
+
+        # Check official API availability
+        if not ctx.has_official_client:
+            return {
+                "error": "Official API required for video posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
+                "hint": "Enable 'Share on LinkedIn' product in your LinkedIn Developer app.",
+            }
+
+        visibility_enum = PostVisibility.PUBLIC if visibility.upper() == "PUBLIC" else PostVisibility.CONNECTIONS
+
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.create_video_post(
+            text=text,
+            video_path=video_file,
+            title=title,
+            visibility=visibility_enum,
+        )
+
+        if result and result.get("success"):
+            logger.info("Created video post", post_urn=result.get("post_urn"))
+            return {"success": True, "post": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to create video post", error=str(e))
+        return {"error": str(e)}
+
+    finally:
+        # Clean up temp file if we created one
+        if temp_file is not None:
+            import os
+            try:
+                os.unlink(temp_file.name)
+                logger.debug("Cleaned up temp video file", path=temp_file.name)
+            except OSError:
+                pass  # Ignore cleanup errors
+
+
+@mcp.tool()
+async def create_document_post(text: str, document_path: str, title: str | None = None, visibility: str = "PUBLIC") -> dict:
+    """
+    Create a LinkedIn post with a document (PDF, PPTX, DOCX) using the Official API.
+
+    Documents appear as carousel-style slideshows in the LinkedIn feed.
+    Great for sharing presentations, guides, reports, etc.
+
+    Requires "Share on LinkedIn" product enabled in your LinkedIn Developer app.
+
+    Supported formats: PDF (recommended), PPTX, DOCX
+    Maximum file size: 100MB
+
+    Args:
+        text: Post text content (max 3000 characters)
+        document_path: Document source - can be:
+            - Absolute path to local file (PDF, PPTX, DOCX)
+            - URL to document (http:// or https://)
+        title: Optional title for the document (defaults to filename)
+        visibility: Post visibility - PUBLIC or CONNECTIONS
+
+    Returns the created post details including post URN and document URN.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import httpx
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient, PostVisibility
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    valid_extensions = (".pdf", ".pptx", ".docx")
+    temp_file = None
+    document_file = None
+
+    try:
+        # Detect input type and resolve to a file path
+        if document_path.startswith(("http://", "https://")):
+            # URL input - download to temp file
+            logger.info("Downloading document from URL", url=document_path[:100])
+            try:
+                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                    response = await client.get(document_path)
+                    response.raise_for_status()
+
+                    # Determine file extension from content-type or URL
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "pdf" in content_type:
+                        ext = ".pdf"
+                    elif "presentation" in content_type or "pptx" in content_type:
+                        ext = ".pptx"
+                    elif "wordprocessing" in content_type or "docx" in content_type:
+                        ext = ".docx"
+                    else:
+                        # Try to infer from URL
+                        from urllib.parse import urlparse
+                        parsed = urlparse(document_path)
+                        path_ext = Path(parsed.path).suffix.lower()
+                        ext = path_ext if path_ext in valid_extensions else ".pdf"
+
+                    # Save to temp file
+                    temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                    temp_file.write(response.content)
+                    temp_file.close()
+                    document_file = Path(temp_file.name)
+                    logger.info("Downloaded document to temp file", path=str(document_file), size_mb=len(response.content) / 1024 / 1024)
+
+            except httpx.HTTPError as e:
+                return {"error": f"Failed to download document from URL: {str(e)}"}
+
+        else:
+            # Local file path
+            document_file = Path(document_path)
+            if not document_file.exists():
+                return {
+                    "error": f"Document file not found: {document_path}",
+                    "hint": "You can also provide a URL (http/https) to download the document.",
+                }
+
+        # Validate file extension
+        if document_file.suffix.lower() not in valid_extensions:
+            return {"error": f"Invalid document format. Supported: {', '.join(valid_extensions)}"}
+
+        # Check official API availability
+        if not ctx.has_official_client:
+            return {
+                "error": "Official API required for document posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
+                "hint": "Enable 'Share on LinkedIn' product in your LinkedIn Developer app.",
+            }
+
+        visibility_enum = PostVisibility.PUBLIC if visibility.upper() == "PUBLIC" else PostVisibility.CONNECTIONS
+
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.create_document_post(
+            text=text,
+            document_path=document_file,
+            title=title,
+            visibility=visibility_enum,
+        )
+
+        if result and result.get("success"):
+            logger.info("Created document post", post_urn=result.get("post_urn"))
+            return {"success": True, "post": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to create document post", error=str(e))
+        return {"error": str(e)}
+
+    finally:
+        # Clean up temp file if we created one
+        if temp_file is not None:
+            import os
+            try:
+                os.unlink(temp_file.name)
+                logger.debug("Cleaned up temp document file", path=temp_file.name)
+            except OSError:
+                pass  # Ignore cleanup errors
+
+
+@mcp.tool()
 async def create_poll(
     question: str,
     options: str,
@@ -1454,6 +1700,167 @@ async def create_comment(
 
 
 @mcp.tool()
+async def delete_comment(
+    post_urn: str,
+    comment_id: str,
+) -> dict:
+    """
+    Delete a comment from a LinkedIn post using the Official API.
+
+    Requires "Community Management API" product enabled in your LinkedIn Developer app.
+
+    Args:
+        post_urn: The URN of the post containing the comment (e.g., "urn:li:share:123456" or "urn:li:activity:123456")
+        comment_id: The ID or URN of the comment to delete
+
+    Returns success status.
+
+    Note: You can only delete comments that you have authored.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required to delete comments. Run 'linkedin-mcp-auth oauth' to authenticate.",
+            "hint": "Enable 'Community Management API' product in your LinkedIn Developer app.",
+        }
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.delete_comment(
+            post_urn=post_urn,
+            comment_id=comment_id,
+        )
+
+        if result and result.get("success"):
+            logger.info("Deleted comment", comment_id=comment_id, post_urn=post_urn)
+            return {"success": True, "result": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to delete comment", error=str(e), post_urn=post_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def create_reaction(
+    target_urn: str,
+    reaction_type: str = "LIKE",
+) -> dict:
+    """
+    Add a reaction to a LinkedIn post or comment using the Official API.
+
+    Requires "Community Management API" product enabled in your LinkedIn Developer app.
+
+    Args:
+        target_urn: The URN of the post or comment to react to
+                   (e.g., "urn:li:share:123456", "urn:li:activity:123456",
+                    "urn:li:comment:(urn:li:activity:123,456)")
+        reaction_type: Type of reaction to add. Options:
+            - LIKE (👍 Like) - default
+            - PRAISE or CELEBRATE (👏 Celebrate)
+            - EMPATHY or LOVE (❤️ Love)
+            - INTEREST or INSIGHTFUL (💡 Insightful)
+            - APPRECIATION or SUPPORT (🙏 Support)
+            - ENTERTAINMENT or FUNNY (😄 Funny)
+
+    Returns the created reaction details.
+
+    Note: The MAYBE reaction type is deprecated and no longer supported.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required to create reactions. Run 'linkedin-mcp-auth oauth' to authenticate.",
+            "hint": "Enable 'Community Management API' product in your LinkedIn Developer app.",
+        }
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.create_reaction(
+            target_urn=target_urn,
+            reaction_type=reaction_type,
+        )
+
+        if result and result.get("success"):
+            logger.info(
+                "Created reaction",
+                reaction_type=result.get("reaction_type"),
+                target_urn=target_urn,
+            )
+            return {"success": True, "reaction": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to create reaction", error=str(e), target_urn=target_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def delete_reaction(
+    target_urn: str,
+) -> dict:
+    """
+    Remove a reaction from a LinkedIn post or comment using the Official API.
+
+    Requires "Community Management API" product enabled in your LinkedIn Developer app.
+
+    Args:
+        target_urn: The URN of the post or comment to remove reaction from
+                   (e.g., "urn:li:share:123456", "urn:li:activity:123456")
+
+    Returns success status.
+
+    Note: This removes your reaction from the specified content.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required to delete reactions. Run 'linkedin-mcp-auth oauth' to authenticate.",
+            "hint": "Enable 'Community Management API' product in your LinkedIn Developer app.",
+        }
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+        result = posts_client.delete_reaction(target_urn=target_urn)
+
+        if result and result.get("success"):
+            logger.info("Deleted reaction", target_urn=target_urn)
+            return {"success": True, "result": result, "source": "official_api"}
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to delete reaction", error=str(e), target_urn=target_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
 async def get_auth_status() -> dict:
     """
     Get LinkedIn authentication status for both official and unofficial APIs.
@@ -1472,6 +1879,11 @@ async def get_auth_status() -> dict:
         "success": True,
         "official_api": {
             "authenticated": ctx.has_official_client,
+            "features": [],
+            "status": "not_configured",
+        },
+        "ad_library_api": {
+            "available": ctx.has_ad_library_client,
             "features": [],
             "status": "not_configured",
         },
@@ -1500,11 +1912,24 @@ async def get_auth_status() -> dict:
 
         # List available features based on scopes
         if "w_member_social" in official_token.scopes:
-            result["official_api"]["features"].extend(["create_post", "create_image_post", "create_poll", "delete_post"])
+            result["official_api"]["features"].extend(["create_post", "create_image_post", "create_video_post", "create_document_post", "create_poll", "delete_post"])
         if "profile" in official_token.scopes or "openid" in official_token.scopes:
             result["official_api"]["features"].append("get_my_profile")
     else:
         result["recommendations"].append("Run 'linkedin-mcp-auth oauth' to enable official API features")
+
+    # Check Ad Library API
+    if ctx.has_ad_library_client:
+        result["ad_library_api"]["status"] = "active"
+        result["ad_library_api"]["features"] = [
+            "search_ads", "search_ads_by_advertiser", "search_ads_by_keyword"
+        ]
+    elif ctx.has_official_client:
+        # OAuth token exists but Ad Library not available - might need product enabled
+        result["ad_library_api"]["status"] = "product_not_enabled"
+        result["recommendations"].append("Enable 'LinkedIn Ad Library' product in your Developer app for ad transparency features")
+    else:
+        result["ad_library_api"]["status"] = "requires_oauth"
 
     # Check unofficial API
     cookies = get_unofficial_cookies()
@@ -1527,6 +1952,183 @@ async def get_auth_status() -> dict:
         result["recommendations"].append("Run 'linkedin-mcp-auth extract-cookies' for unofficial API features")
 
     return result
+
+
+# =============================================================================
+# Ad Library Tools (Ad Transparency & Research)
+# =============================================================================
+
+
+@mcp.tool()
+async def search_ads(
+    keyword: str | None = None,
+    advertiser: str | None = None,
+    country: str | None = None,
+    count: int = 25,
+) -> dict:
+    """
+    Search for ads in the LinkedIn Ad Library.
+
+    The Ad Library provides transparency into ads running on LinkedIn.
+    At least one of keyword or advertiser must be provided.
+
+    Requires "LinkedIn Ad Library" product enabled in your LinkedIn Developer app.
+
+    Args:
+        keyword: Search term to find in ad content
+        advertiser: Company/advertiser name to search for
+        country: ISO 3166-1 alpha-2 country code (e.g., "US", "GB", "DE")
+        count: Number of results to return (default 25, max 100)
+
+    Returns:
+        List of ads matching the search criteria with details including:
+        - Advertiser and payer information
+        - Ad content (text, images, videos)
+        - Impression data and targeting parameters
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not keyword and not advertiser:
+        return {"error": "At least one of 'keyword' or 'advertiser' must be provided"}
+
+    if not ctx.has_ad_library_client:
+        return {
+            "error": "Ad Library API not available. Requires OAuth authentication and Ad Library product enabled.",
+            "hint": "Run 'linkedin-mcp-auth oauth' and enable 'LinkedIn Ad Library' in your Developer app.",
+        }
+
+    try:
+        result = await ctx.ad_library_client.search_ads(
+            keyword=keyword,
+            advertiser=advertiser,
+            country=country,
+            count=count,
+        )
+
+        if result.get("success"):
+            logger.info(
+                "Ad Library search successful",
+                keyword=keyword,
+                advertiser=advertiser,
+                result_count=len(result.get("elements", [])),
+            )
+            return result
+        else:
+            return {"error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Ad Library search failed", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def search_ads_by_advertiser(
+    advertiser_name: str,
+    country: str | None = None,
+    count: int = 25,
+) -> dict:
+    """
+    Search for all ads by a specific advertiser/company.
+
+    Requires "LinkedIn Ad Library" product enabled in your LinkedIn Developer app.
+
+    Args:
+        advertiser_name: Name of the advertiser/company to search for
+        country: Optional country filter (ISO 3166-1 alpha-2 code)
+        count: Number of results to return (default 25, max 100)
+
+    Returns:
+        List of ads from the specified advertiser with full details.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_ad_library_client:
+        return {
+            "error": "Ad Library API not available. Requires OAuth authentication and Ad Library product enabled.",
+            "hint": "Run 'linkedin-mcp-auth oauth' and enable 'LinkedIn Ad Library' in your Developer app.",
+        }
+
+    try:
+        result = await ctx.ad_library_client.search_ads_by_advertiser(
+            advertiser_name=advertiser_name,
+            country=country,
+            count=count,
+        )
+
+        if result.get("success"):
+            logger.info(
+                "Advertiser ad search successful",
+                advertiser=advertiser_name,
+                result_count=len(result.get("elements", [])),
+            )
+            return result
+        else:
+            return {"error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Advertiser ad search failed", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def search_ads_by_keyword(
+    keyword: str,
+    country: str | None = None,
+    count: int = 25,
+) -> dict:
+    """
+    Search for ads containing a specific keyword.
+
+    Requires "LinkedIn Ad Library" product enabled in your LinkedIn Developer app.
+
+    Args:
+        keyword: Search term to find in ad content
+        country: Optional country filter (ISO 3166-1 alpha-2 code)
+        count: Number of results to return (default 25, max 100)
+
+    Returns:
+        List of ads matching the keyword with full details.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_ad_library_client:
+        return {
+            "error": "Ad Library API not available. Requires OAuth authentication and Ad Library product enabled.",
+            "hint": "Run 'linkedin-mcp-auth oauth' and enable 'LinkedIn Ad Library' in your Developer app.",
+        }
+
+    try:
+        result = await ctx.ad_library_client.search_ads_by_keyword(
+            keyword=keyword,
+            country=country,
+            count=count,
+        )
+
+        if result.get("success"):
+            logger.info(
+                "Keyword ad search successful",
+                keyword=keyword,
+                result_count=len(result.get("elements", [])),
+            )
+            return result
+        else:
+            return {"error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Keyword ad search failed", error=str(e))
+        return {"error": str(e)}
 
 
 # =============================================================================

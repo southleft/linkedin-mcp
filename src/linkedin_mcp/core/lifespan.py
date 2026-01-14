@@ -321,6 +321,60 @@ async def init_marketing_client(settings: Settings, official_client: Any) -> Any
         return None
 
 
+async def init_ad_library_client(settings: Settings, official_client: Any) -> Any:
+    """
+    Initialize the LinkedIn Ad Library API client.
+
+    Requires:
+    1. Valid OAuth token from official_client
+    2. Ad Library API product enabled in Developer Portal
+
+    Args:
+        settings: Application settings
+        official_client: LinkedIn Official API client with valid OAuth token
+
+    Returns:
+        Initialized LinkedInAdLibraryClient, or None if not available
+    """
+    if not official_client:
+        logger.info(
+            "Ad Library API disabled - requires OAuth authentication",
+            recommendation="Run: linkedin-mcp-auth oauth",
+        )
+        return None
+
+    if not official_client.is_authenticated:
+        logger.info("Ad Library API disabled - OAuth token expired or invalid")
+        return None
+
+    try:
+        from linkedin_mcp.services.linkedin.ad_library_client import LinkedInAdLibraryClient
+
+        # Get access token from official client
+        access_token = official_client._access_token
+
+        if not access_token:
+            logger.warning("Ad Library API disabled - no access token available")
+            return None
+
+        client = LinkedInAdLibraryClient(
+            access_token=access_token,
+        )
+
+        logger.info(
+            "Ad Library API client initialized",
+            features=["search_ads", "search_ads_by_advertiser", "search_ads_by_keyword"],
+        )
+        return client
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize Ad Library API client",
+            error=str(e),
+        )
+        return None
+
+
 async def init_pnd_client(settings: Settings) -> Any:
     """
     Initialize the Professional Network Data API client (RapidAPI) - PRIMARY.
@@ -696,6 +750,14 @@ async def shutdown_services(ctx: AppContext) -> None:
         except Exception as e:
             logger.warning("Error closing Marketing API client", error=str(e))
 
+    # Close Ad Library API client
+    if ctx.ad_library_client:
+        logger.debug("Closing Ad Library API client")
+        try:
+            await ctx.ad_library_client.close()
+        except Exception as e:
+            logger.warning("Error closing Ad Library API client", error=str(e))
+
     # Close Professional Network Data API client (PRIMARY)
     if ctx.pnd_client:
         logger.debug("Closing Professional Network Data API client")
@@ -859,6 +921,14 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             except Exception as e:
                 logger.warning("Marketing API initialization failed", error=str(e))
 
+        # Initialize Ad Library API client (depends on official client for OAuth token)
+        if ctx.official_client:
+            try:
+                ad_library_client = await init_ad_library_client(settings, ctx.official_client)
+                ctx.ad_library_client = ad_library_client
+            except Exception as e:
+                logger.warning("Ad Library API initialization failed", error=str(e))
+
         # Initialize data provider with fallback chain (after all clients are ready)
         # Fallback order by RELIABILITY: pnd → fresh_data → enhanced → headless → primary
         # The unofficial API (primary) is tried LAST because it's most brittle
@@ -886,6 +956,7 @@ async def lifespan(server: "FastMCP") -> AsyncGenerator[AppContext, None]:
             "Server initialized successfully",
             official_api=ctx.has_official_client,
             marketing_api=ctx.has_marketing_client,
+            ad_library_api=ctx.has_ad_library_client,
             pnd_api=ctx.has_pnd_client,  # PRIMARY (55 endpoints)
             fresh_data_api=ctx.has_fresh_data_client,  # FALLBACK
             unofficial_api=ctx.has_linkedin_client,
