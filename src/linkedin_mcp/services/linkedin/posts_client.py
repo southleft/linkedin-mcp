@@ -1061,6 +1061,137 @@ class LinkedInPostsClient:
             logger.error("Error getting post", error=str(e))
             return None
 
+    def update_post(
+        self,
+        post_urn: str,
+        text: Optional[str] = None,
+        image_path: Optional[Path] = None,
+        alt_text: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Update an existing post's text and/or image.
+
+        LinkedIn allows editing posts for a limited time after creation.
+        You can update the commentary (text) and/or replace the image.
+
+        Args:
+            post_urn: The URN of the post to update (e.g., "urn:li:share:123")
+            text: New post text content (optional, max 3000 characters)
+            image_path: Path to new image file to replace existing image (optional)
+            alt_text: New alt text for the image (optional)
+
+        Returns:
+            Result dict with success status and updated post info
+        """
+        try:
+            if not text and not image_path:
+                return {
+                    "success": False,
+                    "error": "At least one of 'text' or 'image_path' must be provided",
+                }
+
+            # Build the update payload
+            payload = {}
+
+            # Update text/commentary if provided
+            if text is not None:
+                if len(text) > 3000:
+                    logger.warning("Post text exceeds 3000 characters, will be truncated")
+                    text = text[:3000]
+
+                # Escape reserved characters for LinkedIn's 'little text' format
+                escaped_text = escape_little_text(text)
+                payload["commentary"] = escaped_text
+
+            # Handle image update if provided
+            new_image_urn = None
+            if image_path:
+                # Upload the new image first
+                logger.info("Uploading new image for post update", image_path=str(image_path))
+                upload_data = self._initialize_upload(MediaType.IMAGE)
+                if not upload_data:
+                    return {"success": False, "error": "Failed to initialize image upload"}
+
+                upload_url = upload_data.get("uploadUrl")
+                new_image_urn = upload_data.get("image")
+
+                if not upload_url or not new_image_urn:
+                    return {"success": False, "error": "Invalid upload response"}
+
+                if not self._upload_media(upload_url, image_path):
+                    return {"success": False, "error": "Failed to upload new image"}
+
+                logger.info("Uploaded new image for post update", image_urn=new_image_urn)
+
+                # Add the new image content to payload
+                payload["content"] = {
+                    "media": {
+                        "title": alt_text or "Image",
+                        "id": new_image_urn,
+                    }
+                }
+
+            # URL encode the URN
+            encoded_urn = requests.utils.quote(post_urn, safe="")
+
+            logger.info(
+                "Updating post",
+                post_urn=post_urn,
+                has_text_update=text is not None,
+                has_image_update=image_path is not None,
+            )
+
+            # Use POST with partial update (LinkedIn's versioned API pattern)
+            response = self._session.post(
+                f"{self.API_BASE}/rest/posts/{encoded_urn}",
+                headers={
+                    **self._get_headers(),
+                    "X-RestLi-Method": "PARTIAL_UPDATE",
+                },
+                json={"patch": {"$set": payload}},
+            )
+
+            if response.status_code in (200, 204):
+                logger.info("Updated post successfully", post_urn=post_urn)
+                result = {
+                    "success": True,
+                    "post_urn": post_urn,
+                    "updated_fields": list(payload.keys()),
+                }
+                if new_image_urn:
+                    result["new_image_urn"] = new_image_urn
+                return result
+
+            elif response.status_code == 403:
+                error_text = response.text[:500]
+                logger.warning(
+                    "Post update forbidden - may have exceeded edit window",
+                    status=response.status_code,
+                    error=error_text,
+                )
+                return {
+                    "success": False,
+                    "error": "Cannot edit post. LinkedIn limits post editing to a short window after creation.",
+                    "details": error_text,
+                    "status_code": 403,
+                }
+
+            else:
+                logger.error(
+                    "Failed to update post",
+                    status=response.status_code,
+                    error=response.text[:500],
+                )
+                return {
+                    "success": False,
+                    "error": response.text[:500],
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error("Error updating post", error=str(e), post_urn=post_urn)
+            return {"success": False, "error": str(e)}
+
     def create_comment(
         self,
         post_urn: str,

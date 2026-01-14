@@ -1535,6 +1535,81 @@ async def delete_post(post_urn: str) -> dict:
 
 
 @mcp.tool()
+async def edit_post(
+    post_urn: str,
+    text: str | None = None,
+    image_path: str | None = None,
+    alt_text: str | None = None,
+) -> dict:
+    """
+    Edit/update an existing LinkedIn post using the Official API.
+
+    Requires "Share on LinkedIn" product enabled in your LinkedIn Developer app.
+
+    Args:
+        post_urn: The URN of the post to edit (e.g., "urn:li:share:123456")
+        text: New text content for the post (optional, max 3000 characters)
+        image_path: Path to new image file to replace existing media (optional)
+        alt_text: Alt text for the new image (optional)
+
+    Returns:
+        Success status with updated fields information.
+
+    Note:
+        At least one of 'text' or 'image_path' must be provided.
+        This uses LinkedIn's PARTIAL_UPDATE method to update only specified fields.
+    """
+    from pathlib import Path
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.posts_client import LinkedInPostsClient
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.has_official_client:
+        return {
+            "error": "Official API required to edit posts. Run 'linkedin-mcp-auth oauth' to authenticate.",
+        }
+
+    try:
+        posts_client = LinkedInPostsClient(
+            access_token=ctx.official_client._access_token,
+        )
+
+        # Convert string path to Path object if provided
+        image = Path(image_path) if image_path else None
+
+        result = posts_client.update_post(
+            post_urn=post_urn,
+            text=text,
+            image_path=image,
+            alt_text=alt_text,
+        )
+
+        if result and result.get("success"):
+            logger.info(
+                "Edited post",
+                post_urn=post_urn,
+                updated_fields=result.get("updated_fields"),
+            )
+            return {
+                "success": True,
+                "message": f"Post {post_urn} updated successfully",
+                "updated_fields": result.get("updated_fields"),
+                "new_image_urn": result.get("new_image_urn"),
+                "source": "official_api",
+            }
+        else:
+            return {"success": False, "error": result.get("error", "Unknown error")}
+
+    except Exception as e:
+        logger.error("Failed to edit post", error=str(e), post_urn=post_urn)
+        return {"error": str(e)}
+
+
+@mcp.tool()
 async def create_comment(
     post_urn: str,
     text: str,
