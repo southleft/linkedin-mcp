@@ -3628,12 +3628,20 @@ async def get_my_posts(count: int = 50) -> dict:
     count = min(count, 100)
 
     try:
-        # Get the authenticated user's profile ID first
-        my_profile = await ctx.data_provider.get_own_profile()
-        if not my_profile:
-            return {"error": "Could not retrieve your profile"}
+        # Get profile ID via official API first (more reliable), fallback to data_provider
+        profile_id = None
+        if ctx.official_client:
+            try:
+                official_profile = ctx.official_client.get_my_profile()
+                if official_profile:
+                    profile_id = official_profile.get("public_id") or official_profile.get("publicIdentifier")
+            except Exception:
+                pass
 
-        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        if not profile_id:
+            my_profile = await ctx.data_provider.get_own_profile()
+            if my_profile:
+                profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
         if not profile_id:
             return {"error": "Could not determine your profile ID"}
 
@@ -3712,12 +3720,24 @@ async def get_my_post_analytics(post_urns: list[str] | None = None, limit: int =
             if not ctx.data_provider:
                 return {"error": "Provide post_urns or configure data provider to fetch posts automatically"}
 
-            # Get profile and posts
-            my_profile = await ctx.data_provider.get_own_profile()
-            if not my_profile:
+            # Get profile ID via official API first, fallback to data_provider
+            profile_id = None
+            if ctx.official_client:
+                try:
+                    official_profile = ctx.official_client.get_my_profile()
+                    if official_profile:
+                        profile_id = official_profile.get("public_id") or official_profile.get("publicIdentifier")
+                except Exception:
+                    pass
+
+            if not profile_id:
+                my_profile = await ctx.data_provider.get_own_profile()
+                if my_profile:
+                    profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+
+            if not profile_id:
                 return {"error": "Could not retrieve your profile. Please provide post_urns directly."}
 
-            profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
             result = await ctx.data_provider.get_profile_posts(profile_id, limit=limit)
             posts = result.get("posts", result.get("data", []))
 
@@ -3777,12 +3797,21 @@ async def analyze_my_content_performance(post_limit: int = 30) -> dict:
     post_limit = min(post_limit, 50)
 
     try:
-        # Get your profile
-        my_profile = await ctx.data_provider.get_own_profile()
-        if not my_profile:
-            return {"error": "Could not retrieve your profile"}
+        # Get profile ID via official API first, fallback to data_provider
+        profile_id = None
+        if ctx.official_client:
+            try:
+                official_profile = ctx.official_client.get_my_profile()
+                if official_profile:
+                    profile_id = official_profile.get("public_id") or official_profile.get("publicIdentifier")
+            except Exception:
+                pass
 
-        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        if not profile_id:
+            my_profile = await ctx.data_provider.get_own_profile()
+            if my_profile:
+                profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+
         if not profile_id:
             return {"error": "Could not determine your profile ID"}
 
@@ -3854,12 +3883,23 @@ async def get_my_posting_recommendations(post_limit: int = 30) -> dict:
     post_limit = min(post_limit, 50)
 
     try:
-        # Get your profile
-        my_profile = await ctx.data_provider.get_own_profile()
-        if not my_profile:
-            return {"error": "Could not retrieve your profile"}
+        # Get profile ID via official API first, fallback to data_provider
+        profile_id = None
+        if ctx.official_client:
+            try:
+                official_profile = ctx.official_client.get_my_profile()
+                if official_profile:
+                    profile_id = official_profile.get("public_id") or official_profile.get("publicIdentifier")
+            except Exception:
+                pass
 
-        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        if not profile_id:
+            my_profile = await ctx.data_provider.get_own_profile()
+            if my_profile:
+                profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+
+        if not profile_id:
+            return {"error": "Could not determine your profile ID"}
 
         # Get your posts
         result = await ctx.data_provider.get_profile_posts(profile_id, limit=post_limit)
@@ -3952,12 +3992,24 @@ async def generate_my_content_calendar(weeks: int = 4, posts_per_week: int = 3) 
         return {"error": "No LinkedIn data provider available. Configure API credentials."}
 
     try:
-        # Get your profile and posts
-        my_profile = await ctx.data_provider.get_own_profile()
-        if not my_profile:
-            return {"error": "Could not retrieve your profile"}
+        # Get profile ID via official API first, fallback to data_provider
+        profile_id = None
+        if ctx.official_client:
+            try:
+                official_profile = ctx.official_client.get_my_profile()
+                if official_profile:
+                    profile_id = official_profile.get("public_id") or official_profile.get("publicIdentifier")
+            except Exception:
+                pass
 
-        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        if not profile_id:
+            my_profile = await ctx.data_provider.get_own_profile()
+            if my_profile:
+                profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+
+        if not profile_id:
+            return {"error": "Could not determine your profile ID"}
+
         result = await ctx.data_provider.get_profile_posts(profile_id, limit=30)
         posts = result.get("posts", result.get("data", []))
 
