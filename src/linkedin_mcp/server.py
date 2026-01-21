@@ -3597,6 +3597,465 @@ async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> d
 
 
 # =============================================================================
+# Content Intelligence Tools (Official API)
+# =============================================================================
+# These tools use the Official LinkedIn API with r_member_postAnalytics scope
+# for accurate analytics on the authenticated user's own content.
+
+
+@mcp.tool()
+async def get_my_posts(count: int = 50) -> dict:
+    """
+    Get your own LinkedIn posts.
+
+    Uses the data provider to retrieve your authored posts with metadata.
+    Returns post URNs that can be used with get_my_post_analytics.
+
+    Args:
+        count: Number of posts to retrieve (max 100)
+
+    Returns list of your posts with URNs, content, and timestamps.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.data_provider:
+        return {"error": "No LinkedIn data provider available. Configure API credentials."}
+
+    count = min(count, 100)
+
+    try:
+        # Get the authenticated user's profile ID first
+        my_profile = await ctx.data_provider.get_own_profile()
+        if not my_profile:
+            return {"error": "Could not retrieve your profile"}
+
+        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        if not profile_id:
+            return {"error": "Could not determine your profile ID"}
+
+        # Get posts using the data provider
+        result = await ctx.data_provider.get_profile_posts(profile_id, limit=count)
+        posts = result.get("posts", result.get("data", []))
+        source = result.get("source", "data_provider")
+
+        # Format posts for output
+        formatted_posts = []
+        for post in posts:
+            # Extract URN - may be in different formats
+            urn = post.get("urn") or post.get("entityUrn") or post.get("id")
+
+            formatted_posts.append({
+                "urn": urn,
+                "text": (post.get("commentary", "") or post.get("text", ""))[:500],
+                "reactions": post.get("numLikes", 0) or post.get("socialDetail", {}).get("totalSocialActivityCounts", {}).get("numLikes", 0),
+                "comments": post.get("numComments", 0) or post.get("socialDetail", {}).get("totalSocialActivityCounts", {}).get("numComments", 0),
+                "created_at": post.get("createdAt") or post.get("postedAt"),
+                "has_media": bool(post.get("content") or post.get("image") or post.get("video")),
+            })
+
+        return {
+            "success": True,
+            "posts": formatted_posts,
+            "count": len(formatted_posts),
+            "source": source,
+            "note": "Use get_my_post_analytics with the URNs to get official impression data",
+        }
+
+    except Exception as e:
+        logger.error("Failed to get my posts", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_my_post_analytics(post_urns: list[str] | None = None, limit: int = 10) -> dict:
+    """
+    Get analytics for your own posts using the Official API.
+
+    Uses the r_member_postAnalytics scope (Community Management API) to get
+    accurate impression counts, engagement metrics, and reach data.
+
+    Args:
+        post_urns: List of specific post URNs to analyze. If not provided,
+                   will fetch your recent posts automatically.
+        limit: If no URNs provided, analyze this many recent posts (default: 10)
+
+    Returns analytics including impressions, reactions, comments, shares, and engagement rate.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.linkedin.analytics_client import LinkedInAnalyticsClient
+    from linkedin_mcp.services.storage.token_storage import get_official_token
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    # Get OAuth token
+    token_data = get_official_token()
+    if not token_data or token_data.is_expired:
+        return {
+            "error": "OAuth token not available or expired. Run: linkedin-mcp-auth oauth --force --community-management"
+        }
+
+    # Check for analytics scope
+    if "r_member_postAnalytics" not in token_data.scopes:
+        return {
+            "error": "Missing r_member_postAnalytics scope. Re-authenticate with: linkedin-mcp-auth oauth --force --community-management"
+        }
+
+    try:
+        # If no URNs provided, get recent posts via data provider
+        if not post_urns:
+            if not ctx.data_provider:
+                return {"error": "Provide post_urns or configure data provider to fetch posts automatically"}
+
+            # Get profile and posts
+            my_profile = await ctx.data_provider.get_own_profile()
+            if not my_profile:
+                return {"error": "Could not retrieve your profile. Please provide post_urns directly."}
+
+            profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+            result = await ctx.data_provider.get_profile_posts(profile_id, limit=limit)
+            posts = result.get("posts", result.get("data", []))
+
+            # Extract URNs
+            post_urns = []
+            for post in posts:
+                urn = post.get("urn") or post.get("entityUrn") or post.get("id")
+                if urn:
+                    post_urns.append(urn)
+
+        if not post_urns:
+            return {"success": True, "message": "No posts found to analyze"}
+
+        # Get analytics from official API
+        client = LinkedInAnalyticsClient(access_token=token_data.access_token)
+        analytics = client.get_post_analytics(post_urns)
+
+        return {
+            "success": True,
+            "analytics": analytics,
+            "posts_analyzed": len(analytics),
+            "post_urns_checked": post_urns,
+        }
+
+    except Exception as e:
+        logger.error("Failed to get post analytics", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def analyze_my_content_performance(post_limit: int = 30) -> dict:
+    """
+    Analyze your content performance comprehensively.
+
+    Provides detailed analysis of your posting patterns, engagement metrics,
+    best performing content types, and optimal posting times.
+
+    Args:
+        post_limit: Number of posts to analyze (default: 30, max: 50)
+
+    Returns detailed performance analysis with content breakdown, timing insights, and recommendations.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import (
+        get_content_analyzer,
+        get_engagement_analyzer,
+        get_posting_time_analyzer,
+    )
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.data_provider:
+        return {"error": "No LinkedIn data provider available. Configure API credentials."}
+
+    post_limit = min(post_limit, 50)
+
+    try:
+        # Get your profile
+        my_profile = await ctx.data_provider.get_own_profile()
+        if not my_profile:
+            return {"error": "Could not retrieve your profile"}
+
+        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        if not profile_id:
+            return {"error": "Could not determine your profile ID"}
+
+        # Get your posts
+        result = await ctx.data_provider.get_profile_posts(profile_id, limit=post_limit)
+        posts = result.get("posts", result.get("data", []))
+        source = result.get("source", "data_provider")
+
+        if not posts:
+            return {"success": True, "message": "No posts found for analysis"}
+
+        # Run analyses
+        content_analyzer = get_content_analyzer()
+        posting_analyzer = get_posting_time_analyzer()
+        engagement_analyzer = get_engagement_analyzer()
+
+        content_analysis = content_analyzer.analyze_posts_performance(posts)
+        timing_analysis = posting_analyzer.analyze_posting_patterns(posts)
+
+        # Aggregate engagement
+        total_reactions = sum(p.get("numLikes", 0) or 0 for p in posts)
+        total_comments = sum(p.get("numComments", 0) or 0 for p in posts)
+
+        return {
+            "success": True,
+            "analysis": {
+                "posts_analyzed": len(posts),
+                "total_reactions": total_reactions,
+                "total_comments": total_comments,
+                "avg_reactions_per_post": round(total_reactions / len(posts), 1) if posts else 0,
+                "avg_comments_per_post": round(total_comments / len(posts), 1) if posts else 0,
+                "content_analysis": content_analysis,
+                "timing_analysis": timing_analysis,
+            },
+            "source": source,
+        }
+
+    except Exception as e:
+        logger.error("Failed to analyze content performance", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_my_posting_recommendations(post_limit: int = 30) -> dict:
+    """
+    Get personalized posting recommendations based on your content performance.
+
+    Analyzes your posting history to provide data-driven recommendations
+    on content types, timing, and engagement strategies.
+
+    Args:
+        post_limit: Number of posts to analyze for recommendations (default: 30)
+
+    Returns recommendations prioritized by potential impact.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import (
+        get_content_analyzer,
+        get_posting_time_analyzer,
+    )
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.data_provider:
+        return {"error": "No LinkedIn data provider available. Configure API credentials."}
+
+    post_limit = min(post_limit, 50)
+
+    try:
+        # Get your profile
+        my_profile = await ctx.data_provider.get_own_profile()
+        if not my_profile:
+            return {"error": "Could not retrieve your profile"}
+
+        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+
+        # Get your posts
+        result = await ctx.data_provider.get_profile_posts(profile_id, limit=post_limit)
+        posts = result.get("posts", result.get("data", []))
+
+        if not posts or len(posts) < 5:
+            return {
+                "success": True,
+                "message": f"Need at least 5 posts for recommendations. Found {len(posts) if posts else 0}.",
+            }
+
+        # Analyze content and timing
+        content_analyzer = get_content_analyzer()
+        posting_analyzer = get_posting_time_analyzer()
+
+        content_analysis = content_analyzer.analyze_posts_performance(posts)
+        timing_analysis = posting_analyzer.analyze_posting_patterns(posts)
+
+        recommendations = []
+
+        # Content type recommendations
+        if content_analysis.get("recommendations"):
+            recommendations.extend(content_analysis["recommendations"])
+
+        # Timing recommendations
+        if timing_analysis.get("recommended_posting_times"):
+            for time_rec in timing_analysis["recommended_posting_times"][:3]:
+                recommendations.append({
+                    "type": "timing",
+                    "recommendation": f"Post on {time_rec.get('day', 'weekdays')} around {time_rec.get('hour', 'morning')}",
+                    "reason": "Based on your historical engagement patterns",
+                })
+
+        # Engagement insights
+        total_engagement = sum((p.get("numLikes", 0) or 0) + (p.get("numComments", 0) or 0) for p in posts)
+        avg_engagement = total_engagement / len(posts) if posts else 0
+
+        if avg_engagement < 10:
+            recommendations.append({
+                "type": "engagement",
+                "recommendation": "Add more questions or calls-to-action in your posts",
+                "reason": f"Your average engagement is {avg_engagement:.1f} - questions typically increase comments",
+            })
+
+        return {
+            "success": True,
+            "recommendations": recommendations,
+            "based_on": {
+                "posts_analyzed": len(posts),
+                "avg_engagement": round(avg_engagement, 1),
+            },
+        }
+
+    except Exception as e:
+        logger.error("Failed to get posting recommendations", error=str(e))
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def generate_my_content_calendar(weeks: int = 4, posts_per_week: int = 3) -> dict:
+    """
+    Generate a content calendar based on your performance data.
+
+    Creates a data-driven posting schedule that optimizes for your
+    best performing days, times, and content types.
+
+    Args:
+        weeks: Number of weeks to plan (default: 4, max: 12)
+        posts_per_week: Target posts per week (default: 3, max: 7)
+
+    Returns content calendar with suggested dates, times, and content prompts.
+    """
+    from datetime import datetime, timedelta
+
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+    from linkedin_mcp.services.analytics import (
+        get_content_analyzer,
+        get_posting_time_analyzer,
+    )
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    # Validate inputs
+    weeks = min(max(weeks, 1), 12)
+    posts_per_week = min(max(posts_per_week, 1), 7)
+
+    if not ctx.data_provider:
+        return {"error": "No LinkedIn data provider available. Configure API credentials."}
+
+    try:
+        # Get your profile and posts
+        my_profile = await ctx.data_provider.get_own_profile()
+        if not my_profile:
+            return {"error": "Could not retrieve your profile"}
+
+        profile_id = my_profile.get("public_id") or my_profile.get("publicIdentifier")
+        result = await ctx.data_provider.get_profile_posts(profile_id, limit=30)
+        posts = result.get("posts", result.get("data", []))
+
+        # Analyze content and timing patterns
+        content_analyzer = get_content_analyzer()
+        posting_analyzer = get_posting_time_analyzer()
+
+        content_analysis = content_analyzer.analyze_posts_performance(posts) if posts else {}
+        timing_analysis = posting_analyzer.analyze_posting_patterns(posts) if posts else {}
+
+        # Extract best times from analysis
+        best_times = timing_analysis.get("recommended_posting_times", [])
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+        # Default posting days and times if no data
+        preferred_days = ["Tuesday", "Wednesday", "Thursday"]
+        preferred_hours = ["09:00", "12:00", "17:00"]
+
+        if best_times:
+            preferred_days = [t.get("day", "Tuesday") for t in best_times[:posts_per_week]]
+            preferred_hours = [f"{t.get('hour', 9):02d}:00" for t in best_times[:3]]
+
+        # Get content type recommendations
+        content_types = ["Text post", "Image post", "Document/Carousel"]
+        if content_analysis.get("content_type_breakdown"):
+            # Sort by engagement
+            breakdown = content_analysis["content_type_breakdown"]
+            sorted_types = sorted(
+                [(k, v) for k, v in breakdown.items() if v.get("count", 0) > 0],
+                key=lambda x: x[1].get("avg_engagement", 0),
+                reverse=True,
+            )
+            if sorted_types:
+                content_types = [t[0].replace("_", " ").title() for t in sorted_types[:3]]
+
+        # Generate calendar
+        calendar = []
+        today = datetime.now()
+        start_of_week = today - timedelta(days=today.weekday())
+
+        content_prompts = {
+            "Text Post": "Share a thought-provoking insight or ask your network a question",
+            "Image Post": "Share a visual that tells a story - infographic or behind-the-scenes",
+            "Video Post": "Create a short video sharing expertise or industry insights",
+            "Document Post": "Share a carousel with valuable takeaways on a topic",
+            "Article": "Write a long-form piece on a subject you're expert in",
+        }
+
+        for week in range(weeks):
+            week_start = start_of_week + timedelta(weeks=week)
+            week_posts = []
+
+            for i, day_name in enumerate(preferred_days[:posts_per_week]):
+                day_index = day_names.index(day_name) if day_name in day_names else i
+                post_date = week_start + timedelta(days=day_index)
+
+                # Skip past dates
+                if post_date < today:
+                    continue
+
+                content_type = content_types[i % len(content_types)]
+                time_slot = preferred_hours[i % len(preferred_hours)]
+
+                week_posts.append({
+                    "date": post_date.strftime("%Y-%m-%d"),
+                    "day": day_name,
+                    "time": time_slot,
+                    "suggested_content_type": content_type,
+                    "content_prompt": content_prompts.get(content_type, "Share valuable content with your network"),
+                })
+
+            if week_posts:
+                calendar.append({
+                    "week": week + 1,
+                    "week_start": week_start.strftime("%Y-%m-%d"),
+                    "posts": week_posts,
+                })
+
+        return {
+            "success": True,
+            "calendar": calendar,
+            "strategy": {
+                "posts_per_week": posts_per_week,
+                "preferred_days": preferred_days[:posts_per_week],
+                "preferred_times": preferred_hours[:3],
+                "recommended_content_types": content_types[:3],
+            },
+            "based_on": {
+                "posts_analyzed": len(posts),
+            },
+        }
+
+    except Exception as e:
+        logger.error("Failed to generate content calendar", error=str(e))
+        return {"error": str(e)}
+
+
+# =============================================================================
 # Profile Management Tools
 # =============================================================================
 

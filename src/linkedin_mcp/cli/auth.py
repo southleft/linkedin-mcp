@@ -109,9 +109,13 @@ def cmd_oauth(args: argparse.Namespace) -> int:
         "w_member_social",
     ]
 
-    # Add Community Management scope if enabled
+    # Add Community Management scopes if enabled
     if args.community_management:
         scopes.append("w_member_social_feed")
+        # r_member_postAnalytics - required for post analytics (impressions, engagement, etc.)
+        # Available in Community Management API starting from API version 202506
+        scopes.append("r_member_postAnalytics")
+        # Note: r_member_social (read posts) requires separate LinkedIn approval
 
     print("Requesting OAuth 2.0 Authorization with the following scopes:")
     print()
@@ -123,6 +127,7 @@ def cmd_oauth(args: argparse.Namespace) -> int:
     print("   • w_member_social      - Create and manage posts")
     if args.community_management:
         print("   • w_member_social_feed - Comments and reactions (Community Mgmt)")
+        print("   • r_member_postAnalytics - Post analytics (impressions, engagement)")
     print("   ─────────────────────────────────────────────────────────")
     print()
     print("A browser window will open for you to authorize these permissions.")
