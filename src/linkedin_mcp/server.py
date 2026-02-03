@@ -10,9 +10,9 @@ from linkedin_mcp.core.lifespan import lifespan
 
 # Create FastMCP server instance with lifespan for proper initialization
 mcp = FastMCP(
-    name="LinkedIn Intelligence MCP",
-    instructions="AI-powered LinkedIn analytics, content creation, and engagement automation.",
-    version="0.1.0",
+    name="LinkedIn Content Intelligence Platform",
+    instructions="AI-powered content strategy, analytics, and professional networking.",
+    version="0.2.0",
     lifespan=lifespan,
 )
 

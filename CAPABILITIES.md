@@ -160,6 +160,7 @@ The platform automatically selects the best available data source:
 |----------|--------|-------------|-------|
 | 1 | Professional Network Data API | Highest | Fast |
 | 2 | Fresh LinkedIn Data API | High | Fast |
-| 3 | Enhanced HTTP Client | Medium | Medium |
-| 4 | Headless Browser | Medium | Slow |
-| 5 | Unofficial API (linkedin-api) | Variable | Fast |
+| 3 | Marketing API | High (official) | Fast |
+| 4 | Enhanced HTTP Client | Medium | Medium |
+| 5 | Headless Browser | Medium | Slow |
+| 6 | Unofficial API (linkedin-api) | Variable | Fast |

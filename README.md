@@ -72,7 +72,7 @@ LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 | **Text Posts** | Create and publish professional posts with AI assistance |
 | **Image Posts** | Share images with captions and hashtags |
 | **Polls** | Create interactive polls to engage your audience |
-| **Comments** | Comment on posts with optional image attachments |
+| **Comments** | Comment on posts (images supported in nested replies only) |
 | **Rich Formatting** | AI-optimized content with hooks, CTAs, and hashtags |
 
 ### Content Planning
@@ -104,10 +104,10 @@ LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 ### Analytics & Engagement
 | Feature | Description |
 |---------|-------------|
-| **Post Analytics** | Reactions, comments, and engagement metrics |
+| **Post Analytics** | Reactions, comments, and engagement metrics (via official API) |
 | **Content Performance** | Analyze what content works best |
-| **Optimal Posting Times** | Find when your audience is most active |
-| **Hashtag Analysis** | Measure hashtag effectiveness |
+| **Optimal Posting Times** | Derived insights from your engagement patterns |
+| **Hashtag Analysis** | Derived insights from your post performance |
 | **Engagement Reports** | Comprehensive performance reports |
 | **Profile Views** | Track who's viewing your profile |
 
@@ -119,6 +119,8 @@ LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 | **Send Messages** | Message your connections directly |
 | **Conversation Management** | Mark conversations as read |
 
+> **Note**: Messaging features are designed for maintaining existing professional relationships. LinkedIn's terms of service prohibit automated mass messaging.
+
 ### Connections & Networking
 | Feature | Description |
 |---------|-------------|
@@ -126,6 +128,8 @@ LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 | **Send Requests** | Connect with professionals (with optional message) |
 | **Manage Invitations** | Accept or decline connection requests |
 | **Connection Management** | Manage your professional network |
+
+> **Best Practice**: Connection requests should be personalized and relevant. Sending mass requests violates LinkedIn's terms and damages your professional reputation.
 
 ### Job Intelligence
 | Feature | Description |
@@ -553,9 +557,10 @@ Under the hood, the server uses a multi-source architecture that automatically f
 |----------|--------|-------------|
 | 1 | Professional Network Data API | Highest - 55 endpoints |
 | 2 | Fresh LinkedIn Data API | High - profiles & search |
-| 3 | Enhanced HTTP Client | Medium - anti-detection |
-| 4 | Headless Browser | Medium - slowest but reliable |
-| 5 | Unofficial API | Lowest - cookie-based, prone to blocking |
+| 3 | Marketing API | High - organizations (official) |
+| 4 | Enhanced HTTP Client | Medium - anti-detection |
+| 5 | Headless Browser | Medium - slowest but reliable |
+| 6 | Unofficial API | Lowest - cookie-based, prone to blocking |
 
 This ensures high availability, automatic recovery from failures, and best-effort data retrieval.
 
