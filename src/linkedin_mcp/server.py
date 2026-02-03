@@ -2954,6 +2954,604 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
 
 
 # =============================================================================
+# Job Search Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def search_jobs(
+    keywords: str | None = None,
+    location_name: str | None = None,
+    job_type: str | None = None,
+    experience: str | None = None,
+    remote: str | None = None,
+    distance: int | None = None,
+    listed_at: int = 86400,
+    limit: int = 10,
+) -> dict:
+    """
+    Search for job postings on LinkedIn.
+
+    Args:
+        keywords: Search keywords (e.g., 'Python Developer', 'Product Manager')
+        location_name: Location (e.g., 'San Francisco Bay Area', 'New York')
+        job_type: Job type filter - F=Full-time, P=Part-time, C=Contract, T=Temporary, I=Internship
+        experience: Experience level - 1=Internship, 2=Entry, 3=Associate, 4=Mid-Senior, 5=Director, 6=Executive
+        remote: Remote options - 1=On-site, 2=Remote, 3=Hybrid
+        distance: Distance from location in miles
+        listed_at: Max seconds since job was posted (default: 86400 = 24 hours)
+        limit: Maximum results to return (default: 10, max: 50)
+
+    Returns list of matching job postings.
+
+    WARNING: Uses unofficial API. May trigger LinkedIn bot detection with heavy use.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.jobs_enabled:
+        return {
+            "error": "Job search feature is disabled",
+            "suggestion": "Set FEATURE_JOBS_ENABLED=true to enable job search tools",
+        }
+
+    if not ctx.linkedin_client:
+        return {
+            "error": "LinkedIn client not available. Job search requires cookie-based authentication.",
+            "suggestion": "Configure linkedin-api with session cookies using: linkedin-mcp-auth extract-cookies",
+        }
+
+    limit = min(limit, 50)
+
+    # Parse filter values into lists as expected by the API
+    job_type_list = [job_type] if job_type else None
+    experience_list = [experience] if experience else None
+    remote_list = [remote] if remote else None
+
+    try:
+        results = await ctx.linkedin_client.search_jobs(
+            keywords=keywords,
+            location_name=location_name,
+            job_type=job_type_list,
+            experience=experience_list,
+            remote=remote_list,
+            distance=distance,
+            listed_at=listed_at,
+            limit=limit,
+        )
+
+        return {
+            "success": True,
+            "jobs": results,
+            "count": len(results) if results else 0,
+            "source": "linkedin_api",
+            "note": "Uses unofficial API. Results may be limited by LinkedIn bot detection.",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Job search failed", error=str(e), keywords=keywords)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def get_job(job_id: str) -> dict:
+    """
+    Get detailed information about a specific job posting.
+
+    Args:
+        job_id: LinkedIn job ID (from search results or job URL)
+
+    Returns job details including description, requirements, company info, etc.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.jobs_enabled:
+        return {"error": "Job search feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        job = await ctx.linkedin_client.get_job(job_id)
+        return {"success": True, "job": job, "source": "linkedin_api"}
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch job", error=str(e), job_id=job_id)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def get_job_skills(job_id: str) -> dict:
+    """
+    Get skills required for a job posting.
+
+    Args:
+        job_id: LinkedIn job ID
+
+    Returns list of required and preferred skills for the job.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.jobs_enabled:
+        return {"error": "Job search feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        skills = await ctx.linkedin_client.get_job_skills(job_id)
+        return {"success": True, "skills": skills, "source": "linkedin_api"}
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch job skills", error=str(e), job_id=job_id)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def get_profile_views() -> dict:
+    """
+    Get profile view statistics for the authenticated user.
+
+    Returns profile view data including view count and viewer information
+    (if available based on your LinkedIn subscription).
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        views = await ctx.linkedin_client.get_current_profile_views()
+        return {"success": True, "profile_views": views, "source": "linkedin_api"}
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch profile views", error=str(e))
+        return format_error_response(e)
+
+
+# =============================================================================
+# Messaging Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def get_conversations(limit: int = 20) -> dict:
+    """
+    Get your LinkedIn messaging conversations.
+
+    Args:
+        limit: Maximum conversations to return (default: 20)
+
+    Returns list of conversations with participants and last message preview.
+
+    WARNING: Uses unofficial API. May trigger LinkedIn bot detection.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.messaging_enabled:
+        return {
+            "error": "Messaging feature is disabled",
+            "suggestion": "Set FEATURE_MESSAGING_ENABLED=true to enable messaging tools",
+        }
+
+    if not ctx.linkedin_client:
+        return {
+            "error": "LinkedIn client not available. Messaging requires cookie-based authentication.",
+            "suggestion": "Configure linkedin-api with session cookies using: linkedin-mcp-auth extract-cookies",
+        }
+
+    try:
+        conversations = await ctx.linkedin_client.get_conversations()
+        # Limit results
+        limited = conversations[:limit] if conversations else []
+        return {
+            "success": True,
+            "conversations": limited,
+            "count": len(limited),
+            "total_available": len(conversations) if conversations else 0,
+            "source": "linkedin_api",
+            "note": "Uses unofficial API. May trigger bot detection with frequent access.",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch conversations", error=str(e))
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def get_conversation(conversation_id: str) -> dict:
+    """
+    Get full message history for a specific conversation.
+
+    Args:
+        conversation_id: Conversation ID (from get_conversations results)
+
+    Returns conversation details with full message history.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.messaging_enabled:
+        return {"error": "Messaging feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        conversation = await ctx.linkedin_client.get_conversation(conversation_id)
+        return {
+            "success": True,
+            "conversation": conversation,
+            "source": "linkedin_api",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch conversation", error=str(e), conversation_id=conversation_id)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def get_conversation_details(profile_id: str) -> dict:
+    """
+    Get conversation ID and details for a specific profile.
+
+    Useful for finding the conversation ID to send a message to someone.
+
+    Args:
+        profile_id: LinkedIn profile ID or URN
+
+    Returns conversation details including conversation ID.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.messaging_enabled:
+        return {"error": "Messaging feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        details = await ctx.linkedin_client.get_conversation_details(profile_id)
+        return {
+            "success": True,
+            "conversation_details": details,
+            "source": "linkedin_api",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch conversation details", error=str(e), profile_id=profile_id)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def send_message(recipients: list[str], text: str) -> dict:
+    """
+    Send a LinkedIn message to one or more recipients.
+
+    Args:
+        recipients: List of LinkedIn profile public IDs (e.g., ['john-doe', 'jane-smith'])
+        text: Message content to send
+
+    Returns success status and message details.
+
+    WARNING: Uses unofficial API. May trigger LinkedIn bot detection.
+    Sending too many messages may result in account restrictions.
+    Use responsibly and respect LinkedIn's terms of service.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.messaging_enabled:
+        return {
+            "error": "Messaging feature is disabled",
+            "suggestion": "Set FEATURE_MESSAGING_ENABLED=true to enable messaging tools",
+        }
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    if not recipients:
+        return {"error": "At least one recipient is required"}
+
+    if not text or not text.strip():
+        return {"error": "Message text cannot be empty"}
+
+    try:
+        result = await ctx.linkedin_client.send_message(recipients, text)
+        return {
+            **result,
+            "source": "linkedin_api",
+            "warning": "Message sent via unofficial API. Use responsibly to avoid account restrictions.",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to send message", error=str(e), recipient_count=len(recipients))
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def mark_conversation_as_seen(conversation_urn: str) -> dict:
+    """
+    Mark a conversation as read/seen.
+
+    Args:
+        conversation_urn: Conversation URN ID
+
+    Returns success status.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.messaging_enabled:
+        return {"error": "Messaging feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        result = await ctx.linkedin_client.mark_conversation_as_seen(conversation_urn)
+        return {**result, "source": "linkedin_api"}
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to mark conversation as seen", error=str(e))
+        return format_error_response(e)
+
+
+# =============================================================================
+# Connection Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def get_invitations(limit: int = 50) -> dict:
+    """
+    Get pending connection invitations you've received.
+
+    Args:
+        limit: Maximum invitations to return (default: 50)
+
+    Returns list of pending invitations with sender info.
+
+    Note: LinkedIn API only supports fetching received invitations.
+    Sent invitations are not available through this endpoint.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.connections_enabled:
+        return {
+            "error": "Connections feature is disabled",
+            "suggestion": "Set FEATURE_CONNECTIONS_ENABLED=true to enable connection tools",
+        }
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        invitations = await ctx.linkedin_client.get_pending_invitations(limit=limit)
+        return {
+            "success": True,
+            "invitations": invitations,
+            "count": len(invitations) if invitations else 0,
+            "type": "received",
+            "source": "linkedin_api",
+            "note": "Only received invitations are available. Sent invitations not supported by API.",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to fetch invitations", error=str(e))
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def send_connection_request(profile_id: str, message: str | None = None) -> dict:
+    """
+    Send a connection request to a LinkedIn profile.
+
+    Args:
+        profile_id: LinkedIn profile public ID (e.g., 'john-doe')
+        message: Optional personalized message (max ~300 characters)
+
+    Returns success status and request details.
+
+    WARNING: Uses unofficial API. May trigger LinkedIn bot detection.
+    LinkedIn limits connection requests. Use responsibly.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.connections_enabled:
+        return {
+            "error": "Connections feature is disabled",
+            "suggestion": "Set FEATURE_CONNECTIONS_ENABLED=true to enable connection tools",
+        }
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        result = await ctx.linkedin_client.send_connection_request(profile_id, message=message)
+        return {
+            **result,
+            "source": "linkedin_api",
+            "warning": "Connection request sent via unofficial API. LinkedIn limits daily connection requests.",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to send connection request", error=str(e), profile_id=profile_id)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def reply_invitation(invitation_id: str, shared_secret: str, action: str = "accept") -> dict:
+    """
+    Accept or reject a connection invitation.
+
+    Args:
+        invitation_id: Invitation ID (from get_invitations results)
+        shared_secret: Shared secret (from get_invitations results)
+        action: 'accept' or 'reject'
+
+    Returns success status.
+
+    WARNING: Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.connections_enabled:
+        return {"error": "Connections feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    if action not in ("accept", "reject"):
+        return {"error": "Action must be 'accept' or 'reject'"}
+
+    try:
+        if action == "accept":
+            result = await ctx.linkedin_client.accept_invitation(invitation_id, shared_secret)
+        else:
+            result = await ctx.linkedin_client.reject_invitation(invitation_id, shared_secret)
+
+        return {**result, "action": action, "source": "linkedin_api"}
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to reply to invitation", error=str(e), action=action)
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def remove_connection(profile_id: str) -> dict:
+    """
+    Remove an existing LinkedIn connection.
+
+    Args:
+        profile_id: LinkedIn profile public ID of the connection to remove
+
+    Returns success status.
+
+    WARNING: This action is IRREVERSIBLE. The person will need to re-request
+    connection and you'll need to accept. Uses unofficial API.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.connections_enabled:
+        return {"error": "Connections feature is disabled"}
+
+    if not ctx.linkedin_client:
+        return {"error": "LinkedIn client not available"}
+
+    try:
+        result = await ctx.linkedin_client.remove_connection(profile_id)
+        return {
+            **result,
+            "source": "linkedin_api",
+            "warning": "Connection removed. This action is irreversible.",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error("Failed to remove connection", error=str(e), profile_id=profile_id)
+        return format_error_response(e)
+
+
+# =============================================================================
 # Company Tools
 # =============================================================================
 
@@ -4344,6 +4942,9 @@ async def server_info() -> str:
                 "browser_fallback": settings.features.browser_fallback,
                 "analytics_tracking": settings.features.analytics_tracking,
                 "post_scheduling": settings.features.post_scheduling,
+                "messaging_enabled": settings.features.messaging_enabled,
+                "connections_enabled": settings.features.connections_enabled,
+                "jobs_enabled": settings.features.jobs_enabled,
             },
             "rate_limit": {
                 "remaining": ctx.linkedin_client.rate_limit_remaining if ctx.linkedin_client else 0,

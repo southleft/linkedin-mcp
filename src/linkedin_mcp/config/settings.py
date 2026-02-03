@@ -157,6 +157,24 @@ class FeatureFlags(BaseSettings):
     analytics_tracking: bool = Field(default=True)
     post_scheduling: bool = Field(default=True)
 
+    # Messaging features (uses unofficial API - may trigger bot detection)
+    messaging_enabled: bool = Field(
+        default=True,
+        description="Enable messaging tools (conversations, send messages). Uses unofficial API.",
+    )
+
+    # Connection features (uses unofficial API - may trigger bot detection)
+    connections_enabled: bool = Field(
+        default=True,
+        description="Enable connection tools (invitations, connection requests). Uses unofficial API.",
+    )
+
+    # Job search features (uses unofficial API - lower detection risk)
+    jobs_enabled: bool = Field(
+        default=True,
+        description="Enable job search tools. Uses unofficial API with lower detection risk.",
+    )
+
     model_config = SettingsConfigDict(env_prefix="FEATURE_")
 
 

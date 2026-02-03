@@ -187,31 +187,66 @@ def cmd_extract_cookies(args: argparse.Namespace) -> int:
 
         print(f"Extracting cookies from {browser.title()}...")
 
+        # Browser function mapping
+        browser_funcs = {
+            "chrome": browser_cookie3.chrome,
+            "firefox": browser_cookie3.firefox,
+            "edge": browser_cookie3.edge,
+            "brave": browser_cookie3.brave,
+            "opera": browser_cookie3.opera,
+            "opera_gx": browser_cookie3.opera_gx,
+            "arc": browser_cookie3.arc,
+            "vivaldi": browser_cookie3.vivaldi,
+            "chromium": browser_cookie3.chromium,
+            "safari": browser_cookie3.safari,
+            "librewolf": browser_cookie3.librewolf,
+        }
+
         # Get cookies based on browser
-        if browser == "firefox":
-            cookiejar = browser_cookie3.firefox(domain_name=".linkedin.com")
-        elif browser == "chrome":
-            cookiejar = browser_cookie3.chrome(domain_name=".linkedin.com")
-        elif browser == "edge":
-            cookiejar = browser_cookie3.edge(domain_name=".linkedin.com")
-        elif browser == "opera":
-            cookiejar = browser_cookie3.opera(domain_name=".linkedin.com")
-        elif browser == "brave":
-            cookiejar = browser_cookie3.brave(domain_name=".linkedin.com")
-        else:
+        browser_func = browser_funcs.get(browser)
+        if not browser_func:
             print(f"❌ Unsupported browser: {browser}")
-            print("   Supported: firefox, chrome, edge, opera, brave")
+            print("   Supported: " + ", ".join(sorted(browser_funcs.keys())))
             return 1
 
-        # Find the li_at cookie
+        # Get cookies from multiple LinkedIn domains (JSESSIONID is on .www.linkedin.com)
         li_at = None
         jsessionid = None
 
-        for cookie in cookiejar:
-            if cookie.name == "li_at":
-                li_at = cookie.value
-            elif cookie.name == "JSESSIONID":
-                jsessionid = cookie.value
+        # Try .linkedin.com domain first
+        try:
+            cookiejar = browser_func(domain_name=".linkedin.com")
+            for cookie in cookiejar:
+                if cookie.name == "li_at" and not li_at:
+                    li_at = cookie.value
+                elif cookie.name == "JSESSIONID" and not jsessionid:
+                    jsessionid = cookie.value
+        except Exception:
+            pass
+
+        # Also check .www.linkedin.com specifically (some cookies live there)
+        try:
+            cookiejar_www = browser_func(domain_name=".www.linkedin.com")
+            for cookie in cookiejar_www:
+                if cookie.name == "li_at" and not li_at:
+                    li_at = cookie.value
+                elif cookie.name == "JSESSIONID" and not jsessionid:
+                    jsessionid = cookie.value
+        except Exception:
+            pass
+
+        # Last resort: get ALL cookies and filter for LinkedIn
+        if not li_at or not jsessionid:
+            try:
+                all_cookies = browser_func()
+                for cookie in all_cookies:
+                    if "linkedin" in cookie.domain.lower():
+                        if cookie.name == "li_at" and not li_at:
+                            li_at = cookie.value
+                        elif cookie.name == "JSESSIONID" and not jsessionid:
+                            jsessionid = cookie.value
+            except Exception:
+                pass
 
         if not li_at:
             print("❌ Could not find li_at cookie.")
@@ -315,9 +350,13 @@ def main() -> int:
     extract_parser.add_argument(
         "--browser",
         "-b",
-        default="firefox",
-        choices=["firefox", "chrome", "edge", "opera", "brave"],
-        help="Browser to extract cookies from (default: firefox)",
+        default="chrome",
+        choices=[
+            "chrome", "arc", "brave", "edge", "firefox",
+            "opera", "opera_gx", "vivaldi", "chromium",
+            "safari", "librewolf"
+        ],
+        help="Browser to extract cookies from (default: chrome)",
     )
     extract_parser.set_defaults(func=cmd_extract_cookies)
 

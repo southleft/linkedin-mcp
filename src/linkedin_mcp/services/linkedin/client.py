@@ -575,21 +575,24 @@ class LinkedInClient:
 
     async def get_pending_invitations(
         self,
-        sent: bool = False,
+        start: int = 0,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
         """
-        Get pending connection invitations.
+        Get pending connection invitations (received).
+
+        Note: The LinkedIn API only supports fetching received invitations.
+        Sent invitations are not available through this endpoint.
 
         Args:
-            sent: If True, get sent invitations; otherwise get received
+            start: Offset for pagination
+            limit: Maximum invitations to return
 
         Returns:
             List of pending invitations
         """
-        logger.info("Fetching invitations", sent=sent)
-        if sent:
-            return await self._execute(self._client.get_invitations, inviter_id=None)
-        return await self._execute(self._client.get_invitations)
+        logger.info("Fetching invitations", start=start, limit=limit)
+        return await self._execute(self._client.get_invitations, start=start, limit=limit)
 
     async def accept_invitation(self, invitation_id: str, shared_secret: str) -> dict[str, Any]:
         """Accept a connection invitation.
@@ -1061,6 +1064,162 @@ class LinkedInClient:
             public_id=public_id,
             max_results=limit,
         )
+
+    # ==========================================================================
+    # Job Search Methods
+    # ==========================================================================
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def search_jobs(
+        self,
+        keywords: str | None = None,
+        companies: list[str] | None = None,
+        experience: list[str] | None = None,
+        job_type: list[str] | None = None,
+        job_title: list[str] | None = None,
+        industries: list[str] | None = None,
+        location_name: str | None = None,
+        remote: list[str] | None = None,
+        listed_at: int = 24 * 60 * 60,
+        distance: int | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Search for job postings on LinkedIn.
+
+        Args:
+            keywords: Search keywords
+            companies: List of company URN IDs to filter by
+            experience: Experience levels (1=Internship, 2=Entry, 3=Associate, 4=Mid-Senior, 5=Director, 6=Executive)
+            job_type: Job types (F=Full-time, P=Part-time, C=Contract, T=Temporary, V=Volunteer, I=Internship)
+            job_title: List of job title URN IDs
+            industries: List of industry URN IDs
+            location_name: Location name (e.g., "San Francisco Bay Area")
+            remote: Remote options (1=On-site, 2=Remote, 3=Hybrid)
+            listed_at: Max seconds since job was posted (default 24 hours)
+            distance: Distance from location in miles
+            limit: Maximum results to return
+
+        Returns:
+            List of matching job postings
+        """
+        logger.info("Searching jobs", keywords=keywords, limit=limit)
+        return await self._execute(
+            self._client.search_jobs,
+            keywords=keywords,
+            companies=companies,
+            experience=experience,
+            job_type=job_type,
+            job_title=job_title,
+            industries=industries,
+            location_name=location_name,
+            remote=remote,
+            listed_at=listed_at,
+            distance=distance,
+            limit=limit,
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_job(self, job_id: str) -> dict[str, Any]:
+        """
+        Get detailed information about a job posting.
+
+        Args:
+            job_id: LinkedIn job ID
+
+        Returns:
+            Job posting details including description, requirements, company info
+        """
+        logger.info("Fetching job details", job_id=job_id)
+        return await self._execute(self._client.get_job, job_id)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_job_skills(self, job_id: str) -> list[dict[str, Any]]:
+        """
+        Get skills required for a job posting.
+
+        Args:
+            job_id: LinkedIn job ID
+
+        Returns:
+            List of required and preferred skills for the job
+        """
+        logger.info("Fetching job skills", job_id=job_id)
+        return await self._execute(self._client.get_job_skills, job_id)
+
+    # ==========================================================================
+    # Profile Analytics Methods
+    # ==========================================================================
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(LinkedInAPIError),
+    )
+    async def get_current_profile_views(self) -> dict[str, Any]:
+        """
+        Get profile view statistics for the authenticated user.
+
+        Returns:
+            Profile view data including view count and viewer information
+        """
+        logger.info("Fetching profile views")
+        return await self._execute(self._client.get_current_profile_views)
+
+    # ==========================================================================
+    # Additional Messaging Methods
+    # ==========================================================================
+
+    async def get_conversation_details(self, profile_urn: str) -> dict[str, Any]:
+        """
+        Get conversation ID and details for a specific profile.
+
+        Args:
+            profile_urn: Profile URN ID (e.g., "ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w")
+
+        Returns:
+            Conversation details including conversation ID
+        """
+        logger.info("Fetching conversation details", profile_urn=profile_urn)
+        return await self._execute(self._client.get_conversation_details, profile_urn)
+
+    async def mark_conversation_as_seen(self, conversation_urn: str) -> dict[str, Any]:
+        """
+        Mark a conversation as seen/read.
+
+        Args:
+            conversation_urn: Conversation URN ID
+
+        Returns:
+            dict with success status
+        """
+        logger.info("Marking conversation as seen", conversation_urn=conversation_urn)
+        result = await self._execute(self._client.mark_conversation_as_seen, conversation_urn)
+
+        # linkedin-api returns True on ERROR, False on success
+        if result is True:
+            return {
+                "success": False,
+                "error": "LinkedIn API returned an error. Conversation may not have been marked as seen.",
+            }
+
+        return {
+            "success": True,
+            "message": "Conversation marked as seen",
+            "conversation_urn": conversation_urn,
+        }
 
     # ==========================================================================
     # Utility Methods
