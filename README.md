@@ -1,53 +1,66 @@
-# LinkedIn MCP Server
+# LinkedIn Content Intelligence Platform
 
-> **One conversation. Every LinkedIn workflow.**
+> **Your AI-powered content strategist for LinkedIn.**
 >
-> Research competitors, draft posts, analyze engagement, schedule content, and manage your professional presence—all from a single AI-powered interface.
+> Create compelling content, analyze what resonates with your audience, research industry trends, and build meaningful professional relationships—all through natural conversation with Claude.
 
 ---
 
-## The Power of Unified AI Workflows
+## A Content-First Approach to LinkedIn
 
-Imagine this: You ask Claude to research a competitor's LinkedIn presence. Minutes later, you have insights on their content strategy, top-performing posts, and audience engagement patterns. You draft a response post, Claude optimizes it for engagement, and you schedule it for peak hours—all without leaving the conversation.
+This isn't another automation tool for mass outreach. It's a **Content Intelligence Platform** designed for professionals who value quality over quantity.
 
-**But it doesn't stop there.**
+**What makes this different:**
 
-When you combine this MCP with others, the possibilities multiply:
+- **Content Strategy Focus**: Understand what content performs, why it resonates, and how to improve
+- **Authentic Engagement**: Build genuine professional relationships, not spray-and-pray automation
+- **Research-Driven**: Make informed decisions based on real data about your audience and industry
+- **Quality Over Quantity**: Craft thoughtful content rather than churning out generic posts
+
+### The Power of AI-Assisted Workflows
+
+Imagine this: You ask Claude to research a competitor's content strategy. Minutes later, you understand their top-performing topics, posting patterns, and engagement drivers. You craft a differentiated response post, Claude helps optimize it for your audience, and you schedule it for when your network is most active.
+
+**Cross-platform intelligence:**
 
 ```
 LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 ```
 
-1. Pull insights from a LinkedIn thought leader's post
-2. Ask Claude to write a blog article expanding on those ideas
-3. Publish it to your WordPress site (via another MCP)
-4. Create a LinkedIn post promoting the article with the link
+1. Analyze trending topics from industry thought leaders
+2. Develop a unique perspective with Claude's help
+3. Publish to your blog (via another MCP)
+4. Share insights with your LinkedIn network
 
-**This is the future of professional workflows**—one AI assistant orchestrating your entire digital presence across platforms. No more context switching. No more copy-pasting between tabs. Just seamless, intelligent automation.
+**This is content intelligence**—understanding your professional landscape and creating content that genuinely adds value.
 
 ---
 
 ## Who Is This For?
 
-### Content Creators & Marketers
-- Create and schedule LinkedIn posts with AI-powered optimization
-- Manage drafts, analyze content performance, and find optimal posting times
-- Build a consistent content calendar without leaving your AI assistant
+### Content Creators & Thought Leaders
+- Develop and refine your content strategy with data-driven insights
+- Understand what topics resonate with your audience
+- Build a consistent publishing cadence with draft management and scheduling
+- Analyze engagement patterns to continuously improve
 
-### Sales & Business Development
-- Research prospects and companies before outreach
-- Find similar profiles to identify new leads
-- Look up companies by domain to qualify opportunities
+### Marketing & Brand Teams
+- Research competitor content strategies and positioning
+- Track industry trends and thought leadership topics
+- Measure content performance and engagement metrics
+- Coordinate team content calendars
 
-### Recruiters & HR Professionals
-- Research candidate profiles and backgrounds
-- Discover professional interests and expertise areas
-- Find similar professionals based on target profiles
+### Professionals Building Their Brand
+- Craft authentic content that showcases expertise
+- Engage meaningfully with your professional network
+- Research industry conversations before contributing
+- Build genuine connections with relevant professionals
 
 ### Analysts & Researchers
-- Gather company and professional data at scale
-- Analyze engagement patterns and content performance
+- Gather company and professional data for market research
+- Analyze engagement patterns and content trends
 - Generate comprehensive reports on LinkedIn presence
+- Track industry movements and competitive intelligence
 
 ---
 
@@ -96,6 +109,30 @@ LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 | **Optimal Posting Times** | Find when your audience is most active |
 | **Hashtag Analysis** | Measure hashtag effectiveness |
 | **Engagement Reports** | Comprehensive performance reports |
+| **Profile Views** | Track who's viewing your profile |
+
+### Messaging & Conversations
+| Feature | Description |
+|---------|-------------|
+| **View Conversations** | Browse your LinkedIn message threads |
+| **Read Messages** | Access conversation history with connections |
+| **Send Messages** | Message your connections directly |
+| **Conversation Management** | Mark conversations as read |
+
+### Connections & Networking
+| Feature | Description |
+|---------|-------------|
+| **View Invitations** | See pending connection requests |
+| **Send Requests** | Connect with professionals (with optional message) |
+| **Manage Invitations** | Accept or decline connection requests |
+| **Connection Management** | Manage your professional network |
+
+### Job Intelligence
+| Feature | Description |
+|---------|-------------|
+| **Job Search** | Search postings with filters (keywords, location, remote, experience) |
+| **Job Details** | Get comprehensive job posting information |
+| **Skills Analysis** | See required skills for positions |
 
 ---
 
@@ -352,6 +389,7 @@ Would you like more details or to search for employees?
 |------|-------------|
 | `get_feed(limit)` | Get your LinkedIn feed |
 | `get_profile_posts(profile_id, limit)` | Get posts from a profile |
+| `get_profile_views()` | Get your profile view statistics |
 | `get_post_reactions(post_urn)` | Get reactions on a post |
 | `get_post_comments(post_urn)` | Get comments on a post |
 | `analyze_engagement(post_urn)` | Deep engagement analysis |
@@ -359,6 +397,30 @@ Would you like more details or to search for employees?
 | `analyze_optimal_posting_times(profile_id)` | Best times to post |
 | `analyze_hashtag_performance(profile_id)` | Hashtag effectiveness |
 | `generate_engagement_report(profile_id)` | Full engagement report |
+
+### Messaging
+| Tool | Description |
+|------|-------------|
+| `get_conversations(limit)` | List all message conversations |
+| `get_conversation(conversation_urn)` | Get messages from a conversation |
+| `get_conversation_details(profile_urn)` | Get conversation ID for a profile |
+| `send_message(conversation_urn, text)` | Send a message to a conversation |
+| `mark_conversation_as_seen(conversation_urn)` | Mark conversation as read |
+
+### Connections
+| Tool | Description |
+|------|-------------|
+| `get_invitations(limit)` | Get pending connection requests |
+| `send_connection_request(profile_id, message)` | Send a connection request |
+| `reply_invitation(invitation_urn, action)` | Accept or reject an invitation |
+| `remove_connection(profile_id)` | Remove a connection |
+
+### Job Search
+| Tool | Description |
+|------|-------------|
+| `search_jobs(keywords, location, remote, ...)` | Search job postings |
+| `get_job(job_id)` | Get detailed job information |
+| `get_job_skills(job_id)` | Get required skills for a job |
 
 ---
 
@@ -401,10 +463,13 @@ python -m linkedin_mcp                # Alternative server start
 | Text/Image/Poll Posts | Supported | Via Official LinkedIn API |
 | Article Link Shares | Supported | External URLs with metadata |
 | Comments | Supported | Requires Community Management API approval |
+| Direct Messages | Supported | Via unofficial API (requires cookies) |
+| Connection Requests | Supported | Via unofficial API (requires cookies) |
+| Job Search | Supported | Via unofficial API (requires cookies) |
 | Native LinkedIn Articles | Not Available | LinkedIn API limitation |
 | Newsletters | Not Available | No API access |
-| Direct Messages | Not Available | LinkedIn restricts access |
-| Connection Requests | Not Available | LinkedIn restricts access |
+
+> **Note**: Features marked "requires cookies" use LinkedIn's unofficial API. These work reliably but may require periodic cookie refresh (every 24-48 hours). Run `linkedin-mcp-auth extract-cookies` to refresh.
 
 ---
 
@@ -508,4 +573,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-**Built for AI-powered professionals**
+**Built for professionals who value authentic engagement over automation.**

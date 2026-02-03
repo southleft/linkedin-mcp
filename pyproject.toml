@@ -1,7 +1,7 @@
 [project]
 name = "linkedin-mcp"
-version = "0.1.0"
-description = "LinkedIn Intelligence MCP Server - AI-powered LinkedIn analytics, content creation, and engagement automation"
+version = "0.2.0"
+description = "LinkedIn Content Intelligence Platform - AI-powered content strategy, analytics, and professional networking"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11,<4.0"
