@@ -332,6 +332,8 @@ Would you like more details or to search for employees?
 
 ## Available Tools
 
+> **See [CAPABILITIES.md](CAPABILITIES.md) for the complete tool reference with 83 tools across 14 categories.**
+
 ### Content Creation
 | Tool | Description |
 |------|-------------|
