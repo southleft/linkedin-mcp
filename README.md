@@ -140,13 +140,139 @@ LinkedIn Research → Blog Post → WordPress Publish → LinkedIn Promotion
 
 ---
 
+## Important: Required Accounts & Services
+
+> **This MCP server cannot function without external account setup.** Simply installing the code is not enough. Most features require one or more of the accounts described below. If you skip this section, you will encounter permission errors and non-functional tools.
+
+### What You Need (At a Glance)
+
+| Account / Service | Cost | What It Unlocks | Required? |
+|---|---|---|---|
+| [LinkedIn Account](https://www.linkedin.com/signup) | Free | Everything — base requirement | **Yes** |
+| [LinkedIn Developer App](#step-1-linkedin-developer-app) | Free | Posting, analytics, profile data via OAuth | **Yes** |
+| [RapidAPI Account + API Subscriptions](#step-2-rapidapi-account) | Free tier available | Profile/company research, search, articles | **Highly Recommended** |
+| [Browser Cookies](#step-3-browser-cookies-optional) | Free | Messaging, connections, job search, people search | Optional |
+| [Playwright Browser](#step-4-playwright-optional) | Free | Browser automation fallback for data retrieval | Optional |
+
+### Feature-to-Account Mapping
+
+Use this table to determine exactly which accounts you need based on the features you want:
+
+| Feature | LinkedIn Developer App | RapidAPI Subscription | Browser Cookies |
+|---|---|---|---|
+| **Create/edit/delete posts** | "Share on LinkedIn" product | - | - |
+| **Create polls** | "Share on LinkedIn" product | - | - |
+| **Post images/videos/documents** | "Share on LinkedIn" product | - | - |
+| **Post scheduling & drafts** | "Share on LinkedIn" product | - | - |
+| **View your own profile** | OAuth (basic scopes) | - | - |
+| **Post analytics (official)** | "Share on LinkedIn" product | - | - |
+| **Comments & reactions** | "Community Management API" product | - | - |
+| **Ad search & transparency** | "Ad Library API" product | - | - |
+| **Profile research (others)** | - | **Yes** (Professional Network Data API) | Fallback only |
+| **Company research** | - | **Yes** (Professional Network Data API) | Fallback only |
+| **People/company search** | - | **Yes** (Pro plan or higher) | Fallback only |
+| **Article retrieval** | - | **Yes** (Professional Network Data API) | - |
+| **Similar profiles** | - | **Yes** (Professional Network Data API) | - |
+| **Profile interests** | - | **Yes** (Professional Network Data API) | - |
+| **Messaging (read/send)** | - | - | **Required** |
+| **Connection management** | - | - | **Required** |
+| **Job search** | - | - | **Required** |
+| **Content performance analytics** | - | **Yes** (for post data retrieval) | Fallback only |
+
+### Step 1: LinkedIn Developer App
+
+**This is required for all official API features (posting, analytics, comments).**
+
+1. Go to the **[LinkedIn Developer Portal](https://www.linkedin.com/developers/apps)**
+2. Click **"Create app"**
+3. Fill in the required details:
+   - **App name**: e.g., "My LinkedIn MCP"
+   - **LinkedIn Page**: You must associate a LinkedIn Company Page. If you don't have one, [create a Company Page](https://www.linkedin.com/company/setup/new/) first (it can be minimal).
+   - **Privacy policy URL**: Your website URL or LinkedIn profile URL
+4. **Request API Products** (under the "Products" tab):
+
+   | Product | How to Get It | What It Enables |
+   |---|---|---|
+   | **Share on LinkedIn** | Click "Request access" — **instant approval** | Creating posts, images, polls, scheduling |
+   | **Sign In with LinkedIn using OpenID Connect** | Click "Request access" — **instant approval** | OAuth authentication, profile data |
+   | **Community Management API** | Click "Request access" — **requires LinkedIn review** (may take days) | Comments, reactions, mentions |
+   | **Ad Library API** | Click "Request access" — **requires LinkedIn review** | Searching LinkedIn ads |
+
+5. Go to the **"Auth"** tab:
+   - Copy your **Client ID** and **Client Secret** (you'll need these later)
+   - Under "OAuth 2.0 settings", add this redirect URL: `http://localhost:8765/callback`
+
+> **Note on Community Management API**: This product requires LinkedIn to review and approve your application. Without it, commenting on posts and adding reactions will not work. You can still use all other posting features while you wait for approval.
+
+### Step 2: RapidAPI Account
+
+**This is required for profile research, company lookups, search, and article retrieval.** Without it, these features fall back to unreliable cookie-based methods that are prone to LinkedIn's bot detection.
+
+1. **Create a free RapidAPI account** at [rapidapi.com/signup](https://rapidapi.com/signup)
+
+2. **Subscribe to the Professional Network Data API** (primary data source — 55 endpoints):
+   - Go to: **[Professional Network Data API](https://rapidapi.com/pnd-team-pnd-team/api/professional-network-data)**
+   - Click **"Subscribe"** and select a plan:
+
+     | Plan | Price | What You Get |
+     |---|---|---|
+     | **Basic** | Free (limited requests) | Profile lookups, company data, posts, articles |
+     | **Pro** | $50/month | All Basic features + search, higher limits |
+     | **Ultra** | $175/month | Higher rate limits |
+     | **Mega** | $500/month | Highest rate limits |
+
+   - The **Basic (free) plan** is sufficient to get started with profile and company lookups.
+
+3. **(Optional) Subscribe to the Fresh LinkedIn Data API** (secondary/fallback data source):
+   - Go to: **[Fresh LinkedIn Data API (web-scraping-api2)](https://rapidapi.com/freshdata-freshdata-default/api/web-scraping-api2)**
+   - Documentation: [fdocs.info/api-reference/quickstart](https://fdocs.info/api-reference/quickstart)
+   - This serves as a fallback if the primary API is unavailable.
+
+     | Plan | Price | What You Get |
+     |---|---|---|
+     | **Basic** | ~$10/month | Profile/company lookup, posts |
+     | **Pro** | ~$45/month | All Basic features + search capabilities |
+
+4. **Copy your RapidAPI key**:
+   - Go to any subscribed API page on RapidAPI
+   - Your API key appears in the "Header Parameters" section as `X-RapidAPI-Key`
+   - This single key works for all APIs you've subscribed to on RapidAPI
+
+> **Important**: The same RapidAPI key is used for both the Professional Network Data API and the Fresh LinkedIn Data API. You only need one RapidAPI account, but you must subscribe to each API product separately.
+
+### Step 3: Browser Cookies (Optional)
+
+**Required for: messaging, connections, job search, and people search via LinkedIn's unofficial API.**
+
+These features use LinkedIn's internal (unofficial) API, which requires your browser session cookies. This is safe — cookies are stored locally and never sent anywhere except to LinkedIn.
+
+```bash
+# Extract cookies from your browser (after logging into LinkedIn)
+linkedin-mcp-auth extract-cookies --browser chrome
+```
+
+Supported browsers: Chrome, Arc, Brave, Edge, Firefox, Opera, Opera GX, Vivaldi, Chromium, Safari, LibreWolf.
+
+> **Note**: Browser cookies expire every 24-48 hours. You'll need to re-run the extract command periodically. If messaging or connection features stop working, refresh your cookies first.
+
+### Step 4: Playwright (Optional)
+
+**Optional browser automation fallback for data retrieval when other methods fail.**
+
+```bash
+playwright install chromium
+```
+
+This installs a headless browser that acts as a last-resort data source if APIs and cookies are unavailable.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
-- LinkedIn account
-- LinkedIn Developer App (free, 5-minute setup)
+- Accounts set up per the [Required Accounts & Services](#important-required-accounts--services) section above
 
 ### Installation
 
@@ -158,50 +284,40 @@ cd linkedin-mcp
 uv venv && source .venv/bin/activate
 uv pip install -e .
 
-# Install browser automation (optional, for enhanced features)
+# Optional: Install browser automation fallback
 playwright install chromium
 ```
-
-### LinkedIn Developer Setup
-
-1. Go to [LinkedIn Developer Portal](https://www.linkedin.com/developers/apps)
-2. Click **"Create app"**
-3. Fill in details:
-   - **App name**: e.g., "My LinkedIn MCP"
-   - **LinkedIn Page**: Select or create a company page
-   - **Privacy policy URL**: Your website or LinkedIn profile
-4. Go to **Products** → Request **"Share on LinkedIn"** (instant approval)
-5. Go to **Auth** tab:
-   - Copy **Client ID** and **Client Secret**
-   - Add redirect URL: `http://localhost:8765/callback`
 
 ### Configuration
 
 Create a `.env` file in the project root:
 
 ```bash
-# LinkedIn OAuth (Required for posting)
+# LinkedIn OAuth (Required — from LinkedIn Developer Portal)
 LINKEDIN_CLIENT_ID=your_client_id
 LINKEDIN_CLIENT_SECRET=your_client_secret
 LINKEDIN_API_ENABLED=true
 
-# Enhanced Data API (Recommended for reliable profile/company lookups)
-# Powers the top 2 fallback sources: Professional Network Data API + Fresh LinkedIn Data API
+# RapidAPI Key (Recommended — from your RapidAPI dashboard)
+# Powers profile/company research, search, and articles
 THIRDPARTY_RAPIDAPI_KEY=your_api_key
 ```
 
-> **Note**: The RapidAPI key enables the most reliable data sources in the fallback chain. Without it, the server falls back to cookie-based methods which are prone to LinkedIn's bot detection.
+> **Note**: Without the RapidAPI key, profile and company lookups fall back to cookie-based methods which are unreliable and prone to LinkedIn's bot detection. See [Step 2: RapidAPI Account](#step-2-rapidapi-account) for setup instructions.
 
 ### Authentication
 
 ```bash
-# Authenticate with LinkedIn (opens browser)
+# Authenticate with LinkedIn (opens browser for OAuth flow)
 linkedin-mcp-auth oauth
 
-# Optional: Extract cookies for additional features
+# Optional: Include Community Management API scope for comments/reactions
+linkedin-mcp-auth oauth --community-management
+
+# Optional: Extract cookies for messaging, connections, and job search
 linkedin-mcp-auth extract-cookies --browser chrome
 
-# Verify setup
+# Verify your setup
 linkedin-mcp-auth status
 ```
 
