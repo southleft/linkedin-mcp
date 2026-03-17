@@ -11,9 +11,9 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
+from urllib.parse import quote
 
 from requests.cookies import RequestsCookieJar
-
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -103,6 +103,7 @@ class LinkedInClient:
         cookie_path: Path | None = None,
         cookies: dict[str, str] | None = None,
         rate_limit: int = MAX_REQUESTS_PER_HOUR,
+        headless_scraper: Any | None = None,
     ):
         """
         Initialize LinkedIn client.
@@ -113,6 +114,7 @@ class LinkedInClient:
             cookie_path: Path to cookie file (optional)
             cookies: Direct cookies dict with li_at and optionally JSESSIONID
             rate_limit: Max requests per hour
+            headless_scraper: Optional HeadlessLinkedInScraper instance for browser-based API calls
         """
         self.email = email
         self.password = password
@@ -121,6 +123,8 @@ class LinkedInClient:
         self.rate_limiter = RateLimiter(max_requests=rate_limit)
         self._client: Any = None
         self._initialized = False
+        self._headless_scraper = headless_scraper
+        self._cached_profile_urn: str | None = None
 
     async def initialize(self) -> None:
         """
@@ -314,6 +318,41 @@ class LinkedInClient:
         """Ensure client is initialized."""
         if not self._initialized or not self._client:
             raise LinkedInAuthError("LinkedIn client not initialized")
+
+    async def _get_headless_scraper(self) -> Any:
+        """Get or create a HeadlessLinkedInScraper for browser-based API calls.
+
+        Uses a persistent browser session stored at ~/.linkedin-mcp/browser-session/.
+        On first use, if no saved session exists, a visible browser window opens
+        for the user to log in to LinkedIn. After login, the session is saved and
+        all subsequent calls use a headless browser automatically.
+
+        Returns:
+            Authenticated HeadlessLinkedInScraper instance.
+
+        Raises:
+            LinkedInAPIError: If playwright is not installed.
+        """
+        if self._headless_scraper is not None:
+            return self._headless_scraper
+
+        try:
+            from linkedin_mcp.services.linkedin.headless_scraper import (
+                HeadlessLinkedInScraper,
+            )
+        except ImportError as e:
+            raise LinkedInAPIError(
+                "Browser automation required for messaging API but playwright is not installed. "
+                "Install with: pip install playwright && playwright install chromium",
+                cause=e,
+            ) from e
+
+        # Persistent session directory — survives MCP server restarts
+        scraper = HeadlessLinkedInScraper()
+        # Authentication is handled lazily by ensure_authenticated() on first api_fetch()
+
+        self._headless_scraper = scraper
+        return scraper
 
     async def _execute(self, method: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
         """Execute a sync API method asynchronously with rate limiting."""
@@ -649,28 +688,423 @@ class LinkedInClient:
         }
 
     # ==========================================================================
-    # Messaging Methods
+    # Messaging Methods (GraphQL-based - LinkedIn migrated from legacy REST)
     # ==========================================================================
 
-    async def get_conversations(self) -> list[dict[str, Any]]:
-        """Get messaging conversations.
+    async def _get_profile_urn(self) -> str:
+        """Get the authenticated user's profile URN for messaging API calls.
+
+        Tries multiple strategies and caches the result for the session.
 
         Returns:
-            List of conversation dicts extracted from API response.
-        """
-        logger.info("Fetching conversations")
-        result = await self._execute(self._client.get_conversations)
-        # The linkedin-api returns raw JSON response with structure:
-        # {"elements": [...], "paging": {...}}
-        # We need to extract just the elements list
-        if isinstance(result, dict):
-            return result.get("elements", [])
-        return result if isinstance(result, list) else []
+            Profile URN string (e.g., 'ACoAAAClzUMBPjPkKDE5pXFQhnfQPlrPXRWq9eU')
 
-    async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
-        """Get a specific conversation."""
-        logger.info("Fetching conversation", conversation_id=conversation_id)
-        return await self._execute(self._client.get_conversation, conversation_id)
+        Raises:
+            LinkedInAPIError: If profile URN cannot be determined.
+        """
+        # Return cached value if available
+        if self._cached_profile_urn:
+            return self._cached_profile_urn
+
+        urn_id = None
+
+        # Strategy 1: Try get_user_profile via linkedin-api
+        try:
+            own_profile = await self._execute(self._client.get_user_profile)
+            if own_profile:
+                mini_profile = own_profile.get("miniProfile", {})
+                urn_id = (
+                    own_profile.get("member_urn")
+                    or own_profile.get("entityUrn")
+                    or own_profile.get("urn_id")
+                    or mini_profile.get("entityUrn")
+                    or mini_profile.get("objectUrn")
+                )
+                if urn_id and ":" in str(urn_id):
+                    urn_id = str(urn_id).split(":")[-1]
+        except Exception:
+            logger.debug("get_user_profile failed, trying direct API call")
+
+        # Strategy 2: /me API call via headless browser (bypasses bot detection)
+        if not urn_id:
+            try:
+                scraper = await self._get_headless_scraper()
+                me_data = await scraper.api_fetch(
+                    "https://www.linkedin.com/voyager/api/me",
+                )
+                # Response can have miniProfile at root or under data
+                mini = me_data.get("miniProfile", {})
+                data_section = me_data.get("data", {})
+
+                urn_id = (
+                    mini.get("dashEntityUrn")
+                    or mini.get("entityUrn")
+                    or me_data.get("entityUrn")
+                    or me_data.get("objectUrn")
+                    or me_data.get("*miniProfile")
+                    or data_section.get("*miniProfile")
+                )
+                if urn_id and ":" in str(urn_id):
+                    urn_id = str(urn_id).split(":")[-1]
+
+                # Also check included entities
+                if not urn_id:
+                    for item in me_data.get("included", []):
+                        entity_urn = item.get("entityUrn", "") or item.get("dashEntityUrn", "")
+                        if "fsd_profile" in entity_urn or "fs_miniProfile" in entity_urn:
+                            urn_id = entity_urn.split(":")[-1]
+                            break
+            except Exception:
+                logger.debug("Headless /me API call failed")
+
+        # Strategy 3: GraphQL identity endpoint via headless browser
+        if not urn_id:
+            try:
+                scraper = await self._get_headless_scraper()
+                data = await scraper.api_fetch(
+                    "https://www.linkedin.com/voyager/api/graphql"
+                    "?includeWebMetadata=true&variables=()"
+                    "&queryId=voyagerIdentityDashProfiles"
+                    ".b5c27c04968c409fc0ed3546575b9b7a",
+                    headers={"Accept": "application/vnd.linkedin.normalized+json+2.1"},
+                )
+                for item in data.get("included", []):
+                    entity_urn = item.get("entityUrn", "")
+                    if "fsd_profile" in entity_urn:
+                        urn_id = entity_urn.split(":")[-1]
+                        break
+            except Exception:
+                logger.debug("Headless GraphQL identity endpoint failed")
+
+        if not urn_id:
+            raise LinkedInAPIError("Could not extract profile URN for messaging")
+
+        self._cached_profile_urn = urn_id
+        return urn_id
+
+    @staticmethod
+    def _build_graphql_url(query_id: str, variables: str) -> str:
+        """Build a GraphQL URL with LinkedIn's REST-like variable encoding.
+
+        LinkedIn expects: variables=(key:urn%3Ali%3Afsd_profile%3AXXX)
+        Top-level commas between key:value pairs stay literal,
+        but values are fully percent-encoded.
+
+        Args:
+            query_id: The GraphQL query ID.
+            variables: Pre-formatted LinkedIn-style variable string.
+
+        Returns:
+            Fully constructed URL string.
+        """
+        def _split_top_level(s: str) -> list[str]:
+            """Split on commas not inside parentheses."""
+            parts: list[str] = []
+            depth = 0
+            current: list[str] = []
+            for ch in s:
+                if ch == "(":
+                    depth += 1
+                    current.append(ch)
+                elif ch == ")":
+                    depth -= 1
+                    current.append(ch)
+                elif ch == "," and depth == 0:
+                    parts.append("".join(current))
+                    current = []
+                else:
+                    current.append(ch)
+            if current:
+                parts.append("".join(current))
+            return parts
+
+        encoded_parts = []
+        for pair in _split_top_level(variables):
+            key, _, value = pair.partition(":")
+            if value:
+                encoded_parts.append(f"{key.strip()}:{quote(value.strip(), safe='')}")
+            else:
+                encoded_parts.append(key.strip())
+        encoded_vars = ",".join(encoded_parts)
+        return (
+            f"https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql"
+            f"?queryId={query_id}&variables=({encoded_vars})"
+        )
+
+    async def _graphql_fetch_async(self, query_id: str, variables: str) -> dict[str, Any]:
+        """Make a GraphQL request to LinkedIn's messaging API via the headless browser.
+
+        Uses the headless browser's fetch() to bypass LinkedIn's bot detection
+        that blocks all Python HTTP clients. The browser context provides real
+        TLS fingerprints and cookies automatically.
+
+        Args:
+            query_id: The GraphQL query ID (e.g., 'messengerConversations.0d5e6781bbee71c3e51c8843c6519f48')
+            variables: Pre-formatted LinkedIn-style variable string.
+
+        Returns:
+            Parsed JSON response dict.
+
+        Raises:
+            LinkedInAPIError: On HTTP errors or invalid responses.
+            LinkedInAuthError: On authentication failures.
+            LinkedInRateLimitError: On rate limiting.
+        """
+        self._ensure_initialized()
+        await self.rate_limiter.acquire()
+
+        url = self._build_graphql_url(query_id, variables)
+
+        try:
+            scraper = await self._get_headless_scraper()
+            result = await scraper.api_fetch(
+                url,
+                headers={"Accept": "application/graphql"},
+            )
+            return result
+        except Exception as e:
+            error_str = str(e).lower()
+            if "rate" in error_str or "limit" in error_str or "429" in error_str:
+                raise LinkedInRateLimitError(str(e), cause=e) from e
+            elif "auth" in error_str or "login" in error_str or "401" in error_str or "session expired" in error_str:
+                raise LinkedInAuthError(str(e), cause=e) from e
+            elif isinstance(e, (LinkedInAPIError, LinkedInAuthError, LinkedInRateLimitError)):
+                raise
+            else:
+                raise LinkedInAPIError(str(e), cause=e) from e
+
+    @staticmethod
+    def _normalize_conversation(element: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a raw GraphQL conversation element into a clean dict.
+
+        Args:
+            element: Raw conversation element from GraphQL response.
+
+        Returns:
+            Normalized conversation dict with consistent field names.
+        """
+        # Extract participants
+        participants = []
+        for p in element.get("conversationParticipants", []):
+            pt = p.get("participantType", {})
+            member = pt.get("member", {})
+            if member:
+                first = member.get("firstName", {}).get("text", "")
+                last = member.get("lastName", {}).get("text", "")
+                participants.append({
+                    "name": f"{first} {last}".strip(),
+                    "first_name": first,
+                    "last_name": last,
+                    "profile_url": member.get("profileUrl", ""),
+                })
+
+        # Extract title and description (may be null in some response variants)
+        title_obj = element.get("title")
+        desc_obj = element.get("descriptionText")
+
+        title = ""
+        if isinstance(title_obj, dict):
+            title = title_obj.get("text", "")
+        elif title_obj:
+            title = str(title_obj)
+        # Fallback: derive title from non-self participants
+        if not title and participants:
+            other_participants = [p["name"] for p in participants if p["name"]]
+            title = ", ".join(other_participants) if other_participants else ""
+
+        preview = ""
+        if isinstance(desc_obj, dict):
+            preview = desc_obj.get("text", "")
+        elif desc_obj:
+            preview = str(desc_obj)
+
+        # Try to get latest message text from embedded messages
+        if not preview:
+            messages_data = element.get("messages", {})
+            if isinstance(messages_data, dict):
+                msg_elements = messages_data.get("elements", [])
+                if msg_elements:
+                    body = msg_elements[0].get("body", {})
+                    if isinstance(body, dict):
+                        preview = body.get("text", "")
+
+        return {
+            "conversation_id": element.get("entityUrn", ""),
+            "backend_urn": element.get("backendUrn", ""),
+            "title": title,
+            "last_message_preview": preview,
+            "participants": participants,
+            "last_activity_at": element.get("lastActivityAt"),
+            "created_at": element.get("createdAt"),
+            "unread_count": element.get("unreadCount", 0),
+            "is_read": element.get("read", True),
+            "is_group_chat": element.get("groupChat", False),
+            "state": element.get("state", ""),
+            "notification_status": element.get("notificationStatus", ""),
+            "categories": element.get("categories", []),
+        }
+
+    @staticmethod
+    def _normalize_message(element: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a raw GraphQL message element into a clean dict.
+
+        Args:
+            element: Raw message element from GraphQL response.
+
+        Returns:
+            Normalized message dict with consistent field names.
+        """
+        # Extract sender info
+        sender = element.get("sender", {})
+        pt = sender.get("participantType", {})
+        member = pt.get("member", {})
+        first = member.get("firstName", {}).get("text", "") if member else ""
+        last = member.get("lastName", {}).get("text", "") if member else ""
+
+        body = element.get("body", {})
+        body_text = body.get("text", "") if isinstance(body, dict) else str(body)
+
+        return {
+            "message_id": element.get("entityUrn", ""),
+            "conversation_urn": element.get("backendConversationUrn", ""),
+            "sender_name": f"{first} {last}".strip(),
+            "sender_first_name": first,
+            "sender_last_name": last,
+            "body": body_text,
+            "delivered_at": element.get("deliveredAt"),
+        }
+
+    async def get_conversations(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Get messaging conversations via LinkedIn's GraphQL messaging API.
+
+        Args:
+            limit: Maximum number of conversations to return (default: 20).
+
+        Returns:
+            List of normalized conversation dicts with participants, previews, and metadata.
+        """
+        logger.info("Fetching conversations via GraphQL", limit=limit)
+
+        profile_urn = await self._get_profile_urn()
+        mailbox_urn = f"urn:li:fsd_profile:{profile_urn}"
+        variables = f"mailboxUrn:{mailbox_urn}"
+
+        data = await self._graphql_fetch_async(
+            query_id="messengerConversations.0d5e6781bbee71c3e51c8843c6519f48",
+            variables=variables,
+        )
+
+        # Navigate the response structure
+        root = data.get("data", {})
+        sync_token_data = root.get("messengerConversationsBySyncToken", {})
+        elements = sync_token_data.get("elements", [])
+
+        conversations = [self._normalize_conversation(el) for el in elements]
+
+        # Apply limit
+        if limit and len(conversations) > limit:
+            conversations = conversations[:limit]
+
+        logger.info("Fetched conversations via GraphQL", count=len(conversations))
+        return conversations
+
+    async def get_conversation(
+        self,
+        conversation_id: str,
+        before_timestamp: int | None = None,
+        count: int = 20,
+    ) -> dict[str, Any]:
+        """Get messages for a specific conversation via LinkedIn's GraphQL messaging API.
+
+        Args:
+            conversation_id: Conversation URN (e.g., 'urn:li:msg_conversation:(urn:li:fsd_profile:XXX,YYY)')
+            before_timestamp: Load messages delivered before this timestamp (for pagination).
+            count: Number of messages to fetch (default: 20).
+
+        Returns:
+            Dict with conversation_id, messages list, and pagination info.
+        """
+        logger.info(
+            "Fetching conversation messages via GraphQL",
+            conversation_id=conversation_id,
+            before_timestamp=before_timestamp,
+        )
+
+        if before_timestamp is not None:
+            # Paginated query with deliveredAt cursor
+            variables = (
+                f"deliveredAt:{before_timestamp},"
+                f"conversationUrn:{conversation_id},"
+                f"countBefore:{count},countAfter:0"
+            )
+            query_id = "messengerMessages.d8ea76885a52fd5dc5c317078ab7c977"
+        else:
+            # Initial load
+            variables = f"conversationUrn:{conversation_id}"
+            query_id = "messengerMessages.5846eeb71c981f11e0134cb6626cc314"
+
+        data = await self._graphql_fetch_async(
+            query_id=query_id,
+            variables=variables,
+        )
+
+        # Navigate the response structure
+        root = data.get("data", {})
+        sync_token_data = root.get("messengerMessagesBySyncToken", {})
+        elements = sync_token_data.get("elements", [])
+
+        messages = [self._normalize_message(el) for el in elements]
+
+        # Determine pagination cursor (oldest message timestamp)
+        oldest_timestamp = None
+        if messages:
+            timestamps = [m["delivered_at"] for m in messages if m.get("delivered_at")]
+            if timestamps:
+                oldest_timestamp = min(timestamps)
+
+        logger.info("Fetched conversation messages via GraphQL", count=len(messages))
+        return {
+            "conversation_id": conversation_id,
+            "messages": messages,
+            "message_count": len(messages),
+            "oldest_timestamp": oldest_timestamp,
+            "has_more": len(elements) >= count,
+        }
+
+    async def search_conversations(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Search conversations by participant name or message content.
+
+        Fetches conversations and filters locally by matching the query string
+        against participant names and last message previews.
+
+        Args:
+            query: Search string to match against participant names or message previews.
+            limit: Maximum conversations to fetch before filtering (default: 50).
+
+        Returns:
+            List of normalized conversation dicts that match the query.
+        """
+        logger.info("Searching conversations", query=query, limit=limit)
+        query_lower = query.lower()
+
+        all_conversations = await self.get_conversations(limit=limit)
+
+        matches = []
+        for conv in all_conversations:
+            # Check participant names
+            for p in conv.get("participants", []):
+                if query_lower in p.get("name", "").lower():
+                    matches.append(conv)
+                    break
+            else:
+                # Check title and message preview
+                title = conv.get("title", "").lower()
+                preview = conv.get("last_message_preview", "").lower()
+                if query_lower in title or query_lower in preview:
+                    matches.append(conv)
+
+        logger.info("Search conversations matched", query=query, matches=len(matches))
+        return matches
 
     async def send_message(
         self,
@@ -1186,14 +1620,54 @@ class LinkedInClient:
         """
         Get conversation ID and details for a specific profile.
 
+        Uses the conversations list to find a conversation with the given profile URN.
+        Falls back to the legacy API if GraphQL search does not find a match.
+
         Args:
             profile_urn: Profile URN ID (e.g., "ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w")
 
         Returns:
             Conversation details including conversation ID
         """
-        logger.info("Fetching conversation details", profile_urn=profile_urn)
-        return await self._execute(self._client.get_conversation_details, profile_urn)
+        logger.info("Fetching conversation details via GraphQL", profile_urn=profile_urn)
+
+        # Search conversations for one that includes this profile URN in participants
+        conversations = await self.get_conversations(limit=50)
+        for conv in conversations:
+            conv_id = conv.get("conversation_id", "")
+            if profile_urn in conv_id:
+                return conv
+            # Also check participant profile URLs
+            for p in conv.get("participants", []):
+                if profile_urn in p.get("profile_url", ""):
+                    return conv
+
+        # If not found via GraphQL, try legacy method as fallback
+        try:
+            return await self._execute(self._client.get_conversation_details, profile_urn)
+        except Exception:
+            return {
+                "success": False,
+                "error": f"No conversation found for profile URN: {profile_urn}",
+            }
+
+    async def get_mailbox_counts(self) -> dict[str, Any]:
+        """Get unread message counts for the user's mailbox.
+
+        Returns:
+            Dict with mailbox count data from LinkedIn's GraphQL API.
+        """
+        logger.info("Fetching mailbox counts via GraphQL")
+        profile_urn = await self._get_profile_urn()
+        mailbox_urn = f"urn:li:fsd_profile:{profile_urn}"
+        variables = f"mailboxUrn:{mailbox_urn}"
+
+        data = await self._graphql_fetch_async(
+            query_id="messengerMailboxCounts.fc528a5a81a76dff212a4a3d2d48e84b",
+            variables=variables,
+        )
+
+        return data.get("data", {})
 
     async def mark_conversation_as_seen(self, conversation_urn: str) -> dict[str, Any]:
         """
@@ -1231,6 +1705,12 @@ class LinkedInClient:
         return self.rate_limiter.remaining
 
     async def close(self) -> None:
-        """Close the client and save session."""
+        """Close the client, headless scraper, and save session."""
+        if self._headless_scraper:
+            try:
+                await self._headless_scraper.close()
+            except Exception as e:
+                logger.warning("Failed to close headless scraper", error=str(e))
+            self._headless_scraper = None
         await self._save_cookies()
         logger.info("LinkedIn client closed")

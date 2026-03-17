@@ -103,62 +103,76 @@ class HeadlessLinkedInScraper:
     - Profile, feed, and search scraping
     """
 
+    # Default persistent session directory
+    DEFAULT_SESSION_DIR = Path.home() / ".linkedin-mcp" / "browser-session"
+
     def __init__(
         self,
-        session_dir: str | Path = "./data/linkedin_browser_session",
+        session_dir: str | Path | None = None,
         headless: bool = True,
     ):
         """
         Initialize headless scraper.
 
         Args:
-            session_dir: Directory for browser session data
-            headless: Run in headless mode (always True for MCP usage)
+            session_dir: Directory for browser session data (default: ~/.linkedin-mcp/browser-session/)
+            headless: Run in headless mode (set False for interactive login)
         """
-        self.session_dir = Path(session_dir)
+        self.session_dir = Path(session_dir) if session_dir else self.DEFAULT_SESSION_DIR
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        self.headless = headless  # Always headless for background operation
+        self.headless = headless
 
         self._playwright = None
+        self._browser = None
         self._context = None
         self._page = None
         self._initialized = False
+        self._authenticated = False
 
-    async def initialize(self) -> None:
-        """Initialize the browser with stealth configuration."""
+    async def initialize(self, headless: bool | None = None) -> None:
+        """Initialize the browser with stealth configuration.
+
+        Args:
+            headless: Override the instance headless setting (used for interactive login).
+        """
         if self._initialized:
             return
 
         if async_playwright is None:
             raise BrowserAutomationError(
                 "No browser automation library available",
-                details={"install_cmd": "pip install patchright && patchright install chrome"},
+                details={"install_cmd": "pip install playwright && playwright install chromium"},
             )
 
+        use_headless = headless if headless is not None else self.headless
         self._playwright = await async_playwright().start()
+        storage_state = self.session_dir / "session.json"
 
         if USING_PATCHRIGHT:
             # Patchright with persistent context (most undetectable)
+            args = [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ]
+            if use_headless:
+                args.append("--headless=new")
+
             self._context = await self._playwright.chromium.launch_persistent_context(
                 user_data_dir=str(self.session_dir),
-                channel="chrome",  # Use real Chrome, not Chromium
-                headless=False,  # Set False but use --headless=new in args
-                args=[
-                    "--headless=new",  # New headless mode (Chrome 112+)
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
+                channel="chrome",
+                headless=False,  # Controlled via --headless=new arg
+                args=args,
                 no_viewport=False,
                 viewport={"width": 1920, "height": 1080},
                 locale="en-US",
                 timezone_id="America/New_York",
             )
-            logger.info("Initialized Patchright with headless=new mode")
+            logger.info("Initialized Patchright", headless=use_headless)
         else:
             # Standard Playwright with stealth scripts
-            browser = await self._playwright.chromium.launch(
-                headless=True,
+            self._browser = await self._playwright.chromium.launch(
+                headless=use_headless,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
@@ -168,26 +182,136 @@ class HeadlessLinkedInScraper:
                 ],
             )
 
-            # Try to load existing session
-            storage_state = self.session_dir / "session.json"
-            self._context = await browser.new_context(
+            self._context = await self._browser.new_context(
                 viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
                 locale="en-US",
                 timezone_id="America/New_York",
                 storage_state=str(storage_state) if storage_state.exists() else None,
             )
 
-            # Inject stealth scripts
             await self._context.add_init_script(STEALTH_SCRIPTS)
-            logger.info("Initialized Playwright with stealth scripts")
+            logger.info("Initialized Playwright", headless=use_headless)
 
-        # Get or create page
         pages = self._context.pages
         self._page = pages[0] if pages else await self._context.new_page()
 
         self._initialized = True
         logger.info("Headless LinkedIn scraper initialized")
+
+    async def ensure_authenticated(self) -> bool:
+        """Ensure the browser session is authenticated with LinkedIn.
+
+        Checks the current session by navigating to LinkedIn. If the session
+        is expired or missing, launches a VISIBLE browser window for the user
+        to log in interactively. Saves the session to disk after successful login.
+
+        Returns:
+            True if authenticated.
+
+        Raises:
+            BrowserAutomationError: If authentication cannot be completed.
+        """
+        if self._authenticated:
+            return True
+
+        if not self._initialized:
+            await self.initialize()
+
+        # Try navigating to LinkedIn to check if we're logged in
+        logger.info("Checking LinkedIn authentication status")
+        try:
+            await self._page.goto(
+                "https://www.linkedin.com/feed/",
+                wait_until="domcontentloaded",
+                timeout=20000,
+            )
+        except Exception as e:
+            logger.warning("Navigation failed during auth check", error=str(e))
+
+        current_url = self._page.url
+        is_logged_in = (
+            "linkedin.com" in current_url
+            and "login" not in current_url.lower()
+            and "authwall" not in current_url.lower()
+            and "uas" not in current_url.lower()
+        )
+
+        if is_logged_in:
+            logger.info("LinkedIn session is active")
+            await self._save_session()
+            self._authenticated = True
+            return True
+
+        # Session expired — need interactive login
+        logger.warning("LinkedIn session expired, interactive login required")
+
+        # Close current browser and relaunch VISIBLE for login
+        await self.close()
+        self._initialized = False
+        self._authenticated = False
+
+        await self.initialize(headless=False)
+
+        await self._page.goto(
+            "https://www.linkedin.com/login",
+            wait_until="domcontentloaded",
+            timeout=20000,
+        )
+
+        logger.info(
+            "Waiting for LinkedIn login — please log in to the browser window that just opened"
+        )
+
+        # Wait for the user to complete login (up to 3 minutes)
+        # After successful login, LinkedIn redirects to /feed/
+        try:
+            await self._page.wait_for_url(
+                "**/feed/**",
+                timeout=180000,  # 3 minutes
+            )
+        except Exception:
+            # Check if they ended up somewhere else on LinkedIn (still logged in)
+            current_url = self._page.url
+            if "linkedin.com" in current_url and "login" not in current_url.lower():
+                logger.info("Login detected via URL change")
+            else:
+                raise BrowserAutomationError(
+                    "LinkedIn login timed out. Please try again.",
+                    details={"current_url": current_url},
+                )
+
+        logger.info("LinkedIn login successful")
+        await self._save_session()
+
+        # Close visible browser, relaunch headless with saved session
+        await self.close()
+        self._initialized = False
+
+        await self.initialize(headless=True)
+        self._authenticated = True
+
+        # Navigate to feed to confirm session works headlessly
+        await self._page.goto(
+            "https://www.linkedin.com/feed/",
+            wait_until="domcontentloaded",
+            timeout=20000,
+        )
+
+        current_url = self._page.url
+        if "login" in current_url.lower() or "authwall" in current_url.lower():
+            raise BrowserAutomationError(
+                "Session did not persist after login. Please try again.",
+                details={"url": current_url},
+            )
+
+        logger.info("Headless session confirmed after login")
+        await self._save_session()
+        return True
 
     async def set_cookies(
         self,
@@ -264,12 +388,21 @@ class HeadlessLinkedInScraper:
             except Exception:
                 pass
 
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+
         if self._playwright:
             try:
                 await self._playwright.stop()
             except Exception:
                 pass
 
+        self._context = None
+        self._browser = None
+        self._page = None
         self._initialized = False
         logger.info("Headless scraper closed")
 
@@ -279,6 +412,153 @@ class HeadlessLinkedInScraper:
 
     async def __aexit__(self, *args):
         await self.close()
+
+    # =========================================================================
+    # API Fetch - Browser-based API transport
+    # =========================================================================
+
+    async def api_fetch(
+        self,
+        url: str,
+        headers: dict | None = None,
+        method: str = "GET",
+    ) -> dict:
+        """Make an API call through the browser context.
+
+        Uses page.evaluate() to make fetch() calls from within the authenticated
+        browser session. This bypasses all TLS/bot detection since the request
+        originates from a real browser with real cookies.
+
+        Args:
+            url: Full URL or path (e.g., '/voyager/api/me')
+            headers: Additional headers to include
+            method: HTTP method (default: GET)
+
+        Returns:
+            Parsed JSON response dict
+
+        Raises:
+            BrowserAutomationError: On network or auth errors
+        """
+        # Ensure browser is initialized and authenticated
+        await self.ensure_authenticated()
+
+        # Ensure we are on linkedin.com so cookies are sent
+        current_url = self._page.url
+        if not current_url or "linkedin.com" not in current_url:
+            logger.debug("Navigating to LinkedIn feed for cookie context")
+            await self._page.goto(
+                "https://www.linkedin.com/feed/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            await self._human_delay(1000, 2000)
+
+        # Convert relative paths to full URLs
+        if url.startswith("/"):
+            url = f"https://www.linkedin.com{url}"
+
+        extra_headers = headers or {}
+
+        js_function = """
+            async (config) => {
+                try {
+                    const csrf = document.cookie.split(';').map(c => c.trim())
+                        .find(c => c.startsWith('JSESSIONID='))
+                        ?.split('=').slice(1).join('=').replace(/"/g, '') || '';
+
+                    const headers = {
+                        'csrf-token': csrf,
+                        'X-Restli-Protocol-Version': '2.0.0',
+                        'X-Li-Lang': 'en_US',
+                        ...config.headers
+                    };
+
+                    const resp = await fetch(config.url, {
+                        method: config.method,
+                        headers,
+                        credentials: 'include'
+                    });
+
+                    let data;
+                    const contentType = resp.headers.get('content-type') || '';
+                    if (contentType.includes('json') || contentType.includes('graphql')) {
+                        data = await resp.json();
+                    } else {
+                        data = { _raw: await resp.text() };
+                    }
+
+                    return {
+                        status: resp.status,
+                        ok: resp.ok,
+                        data: data
+                    };
+                } catch (err) {
+                    return {
+                        status: 0,
+                        ok: false,
+                        data: null,
+                        error: err.message || String(err)
+                    };
+                }
+            }
+        """
+
+        result = await self._page.evaluate(
+            js_function,
+            {"url": url, "method": method, "headers": extra_headers},
+        )
+
+        # Handle network-level errors
+        if result.get("error"):
+            raise BrowserAutomationError(
+                f"Browser fetch failed: {result['error']}",
+                details={"url": url, "method": method},
+            )
+
+        status = result.get("status", 0)
+
+        # Handle auth errors with one retry after re-navigating
+        if status in (401, 403):
+            logger.warning(
+                "Auth error from browser fetch, retrying after navigation",
+                status=status,
+                url=url,
+            )
+            await self._page.goto(
+                "https://www.linkedin.com/feed/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            await self._human_delay(1500, 3000)
+
+            # Check if we got redirected to login — trigger re-authentication
+            if "login" in self._page.url.lower() or "authwall" in self._page.url.lower():
+                logger.warning("Session expired during API call, triggering re-authentication")
+                self._authenticated = False
+                await self.ensure_authenticated()
+
+            # Retry the fetch once
+            result = await self._page.evaluate(
+                js_function,
+                {"url": url, "method": method, "headers": extra_headers},
+            )
+
+            status = result.get("status", 0)
+            if not result.get("ok"):
+                raise BrowserAutomationError(
+                    f"Browser fetch failed after retry with status {status}",
+                    details={"url": url, "method": method},
+                )
+
+        # Handle other HTTP errors
+        if not result.get("ok"):
+            raise BrowserAutomationError(
+                f"Browser fetch returned status {status}",
+                details={"url": url, "method": method, "status": status},
+            )
+
+        return result.get("data", {})
 
     # =========================================================================
     # Profile Methods

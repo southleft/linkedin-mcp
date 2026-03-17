@@ -3146,14 +3146,15 @@ async def get_profile_views() -> dict:
 
 
 @mcp.tool()
-async def get_conversations(limit: int = 20) -> dict:
+async def get_conversations(limit: int = 20, search: str | None = None) -> dict:
     """
     Get your LinkedIn messaging conversations.
 
     Args:
         limit: Maximum conversations to return (default: 20)
+        search: Optional search string to filter by participant name or message content
 
-    Returns list of conversations with participants and last message preview.
+    Returns list of conversations with participants, last message preview, and metadata.
 
     WARNING: Uses unofficial API. May trigger LinkedIn bot detection.
     """
@@ -3171,23 +3172,32 @@ async def get_conversations(limit: int = 20) -> dict:
             "suggestion": "Set FEATURE_MESSAGING_ENABLED=true to enable messaging tools",
         }
 
-    if not ctx.linkedin_client:
-        return {
-            "error": "LinkedIn client not available. Messaging requires cookie-based authentication.",
-            "suggestion": "Configure linkedin-api with session cookies using: linkedin-mcp-auth extract-cookies",
-        }
+    # Get or create a client for messaging (uses headless browser transport)
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {
+                "error": "LinkedIn client not available. Could not initialize messaging client.",
+                "suggestion": "Ensure playwright is installed: pip install playwright && playwright install chromium",
+            }
 
     try:
-        conversations = await ctx.linkedin_client.get_conversations()
-        # Limit results
-        limited = conversations[:limit] if conversations else []
+        if search:
+            conversations = await client.search_conversations(search, limit=limit)
+        else:
+            conversations = await client.get_conversations(limit=limit)
+
         return {
             "success": True,
-            "conversations": limited,
-            "count": len(limited),
-            "total_available": len(conversations) if conversations else 0,
-            "source": "linkedin_api",
-            "note": "Uses unofficial API. May trigger bot detection with frequent access.",
+            "conversations": conversations,
+            "count": len(conversations),
+            "source": "graphql_messaging_api",
+            "search_query": search,
         }
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
@@ -3197,14 +3207,20 @@ async def get_conversations(limit: int = 20) -> dict:
 
 
 @mcp.tool()
-async def get_conversation(conversation_id: str) -> dict:
+async def get_conversation(
+    conversation_id: str,
+    before_timestamp: int | None = None,
+    count: int = 20,
+) -> dict:
     """
-    Get full message history for a specific conversation.
+    Get messages for a specific conversation.
 
     Args:
-        conversation_id: Conversation ID (from get_conversations results)
+        conversation_id: Conversation URN (from get_conversations results, e.g., 'urn:li:msg_conversation:...')
+        before_timestamp: Load messages delivered before this epoch ms timestamp (for pagination)
+        count: Number of messages to fetch (default: 20)
 
-    Returns conversation details with full message history.
+    Returns conversation messages with sender info, body text, and pagination cursor.
 
     WARNING: Uses unofficial API.
     """
@@ -3219,15 +3235,26 @@ async def get_conversation(conversation_id: str) -> dict:
     if not settings.features.messaging_enabled:
         return {"error": "Messaging feature is disabled"}
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not available"}
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {"error": "LinkedIn client not available"}
 
     try:
-        conversation = await ctx.linkedin_client.get_conversation(conversation_id)
+        result = await client.get_conversation(
+            conversation_id,
+            before_timestamp=before_timestamp,
+            count=count,
+        )
         return {
             "success": True,
-            "conversation": conversation,
-            "source": "linkedin_api",
+            **result,
+            "source": "graphql_messaging_api",
         }
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
