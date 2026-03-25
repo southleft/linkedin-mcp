@@ -902,11 +902,22 @@ async def get_feed(limit: int = 10, use_cache: bool = True) -> dict:
     ctx = get_context()
     cache = get_cache()
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not initialized"}
-
     limit = min(limit, 50)  # Cap at 50
     cache_key = cache.make_key("feed", str(limit))
+
+    # Get or create a client (headless browser fallback)
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {
+                "error": "LinkedIn client not available. Could not initialize feed client.",
+                "suggestion": "Ensure playwright is installed: pip install playwright && playwright install chromium",
+            }
 
     try:
         if use_cache:
@@ -914,7 +925,7 @@ async def get_feed(limit: int = 10, use_cache: bool = True) -> dict:
             if cached_data:
                 return {"success": True, "posts": cached_data, "count": len(cached_data), "cached": True}
 
-        feed = await ctx.linkedin_client.get_feed(limit=limit)
+        feed = await client.get_feed(limit=limit)
         await cache.set(cache_key, feed, CacheService.TTL_FEED)
         return {"success": True, "posts": feed, "count": len(feed), "cached": False}
     except Exception as e:
@@ -2675,7 +2686,27 @@ async def get_post_reactions(post_urn: str) -> dict:
                 "source": source,
             }
 
-        return {"error": "No LinkedIn data provider available. Configure API credentials."}
+        # Fall back to linkedin_client or headless browser
+        client = ctx.linkedin_client
+        if not client:
+            try:
+                from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+                client = LinkedInClient()
+                await client.initialize()
+            except Exception:
+                return {
+                    "error": "No LinkedIn data provider available. Configure API credentials.",
+                    "suggestion": "Ensure playwright is installed for headless browser fallback.",
+                }
+
+        reactions = await client.get_post_reactions(post_urn)
+        return {
+            "success": True,
+            "reactions": reactions,
+            "count": len(reactions),
+            "source": "linkedin_client",
+        }
     except Exception as e:
         logger.error("Failed to fetch reactions", error=str(e), post_urn=post_urn)
         return {"error": str(e)}
@@ -2711,7 +2742,27 @@ async def get_post_comments(post_urn: str, limit: int = 50) -> dict:
                 "source": source,
             }
 
-        return {"error": "No LinkedIn data provider available. Configure API credentials."}
+        # Fall back to linkedin_client or headless browser
+        client = ctx.linkedin_client
+        if not client:
+            try:
+                from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+                client = LinkedInClient()
+                await client.initialize()
+            except Exception:
+                return {
+                    "error": "No LinkedIn data provider available. Configure API credentials.",
+                    "suggestion": "Ensure playwright is installed for headless browser fallback.",
+                }
+
+        comments = await client.get_post_comments(post_urn, limit=limit)
+        return {
+            "success": True,
+            "comments": comments,
+            "count": len(comments),
+            "source": "linkedin_client",
+        }
     except Exception as e:
         logger.error("Failed to fetch comments", error=str(e), post_urn=post_urn)
         return {"error": str(e)}
@@ -2811,51 +2862,76 @@ async def search_people(
         logger.debug("data_provider not available")
 
     # Fall back to linkedin_client if data provider fails
-    if not ctx.linkedin_client:
-        logger.warning(
-            "No search sources available",
-            sources_tried=sources_tried,
-            errors=errors_encountered,
-        )
-        return {
-            "error": "LinkedIn search not available. Fresh Data API search requires Pro plan ($45/mo), and linkedin-api is not configured.",
-            "sources_tried": sources_tried,
-            "suggestion": "Configure linkedin-api with session cookies, or upgrade Fresh Data API to Pro plan for search capabilities.",
-        }
+    client = ctx.linkedin_client
+    if client:
+        try:
+            logger.debug("Trying linkedin_client.search_people (cookie-based)")
+            results = await client.search_people(
+                keywords=keywords,
+                limit=limit,
+                keyword_title=keyword_title,
+                keyword_company=keyword_company,
+            )
+            logger.info("Search completed via linkedin_client", count=len(results))
+            return {
+                "success": True,
+                "results": results,
+                "count": len(results),
+                "source": "linkedin_api",
+                "note": "Using cookie-based linkedin-api. Results may be limited if LinkedIn detects bot activity.",
+            }
+        except Exception as e:
+            sources_tried.append("linkedin_api")
+            errors_encountered.append(f"linkedin-api: {str(e)}")
+            logger.warning("linkedin_client search_people failed, trying headless browser", error=str(e))
 
-    try:
-        logger.debug("Trying linkedin_client.search_people (cookie-based)")
-        results = await ctx.linkedin_client.search_people(
-            keywords=keywords,
-            limit=limit,
-            keyword_title=keyword_title,
-            keyword_company=keyword_company,
-        )
-        logger.info("Search completed via linkedin_client", count=len(results))
-        return {
-            "success": True,
-            "results": results,
-            "count": len(results),
-            "source": "linkedin_api",
-            "note": "Using cookie-based linkedin-api. Results may be limited if LinkedIn detects bot activity.",
-        }
-    except Exception as e:
-        from linkedin_mcp.core.exceptions import format_error_response
-        sources_tried.append("linkedin_api")
-        errors_encountered.append(f"linkedin-api: {str(e)}")
-        logger.error(
-            "All search sources failed",
-            error=str(e),
-            sources_tried=sources_tried,
-        )
-        error_response = format_error_response(e)
-        error_response["sources_tried"] = sources_tried
-        error_response["diagnostic_info"] = {
+    # Fall back to headless browser as last resort
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            client = None
+
+    if client:
+        try:
+            logger.debug("Trying headless browser people search")
+            search_query = keywords or ""
+            if keyword_title:
+                search_query = f"{search_query} {keyword_title}".strip()
+            if keyword_company:
+                search_query = f"{search_query} {keyword_company}".strip()
+            results = await client.search_people_headless(keywords=search_query, limit=limit)
+            logger.info("Search completed via headless browser", count=len(results))
+            return {
+                "success": True,
+                "results": results,
+                "count": len(results),
+                "source": "headless_browser",
+            }
+        except Exception as e:
+            sources_tried.append("headless_browser")
+            errors_encountered.append(f"headless_browser: {str(e)}")
+            logger.error("Headless browser people search failed", error=str(e))
+
+    from linkedin_mcp.core.exceptions import format_error_response
+    logger.error(
+        "All search sources failed",
+        sources_tried=sources_tried,
+    )
+    return {
+        "error": "All people search sources failed.",
+        "sources_tried": sources_tried,
+        "diagnostic_info": {
             "fresh_data_api": "Requires Pro plan ($45/mo) for Search Lead/Company",
             "linkedin_api": "Cookie-based, subject to LinkedIn bot detection",
+            "headless_browser": "Playwright-based browser fallback",
             "errors": errors_encountered,
-        }
-        return error_response
+        },
+        "suggestion": "Configure linkedin-api with session cookies, upgrade Fresh Data API, or ensure playwright is installed.",
+    }
 
 
 @mcp.tool()
@@ -2911,46 +2987,136 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
         logger.debug("data_provider not available")
 
     # Fall back to linkedin_client if data provider fails
-    if not ctx.linkedin_client:
-        logger.warning(
-            "No company search sources available",
-            sources_tried=sources_tried,
-            errors=errors_encountered,
-        )
+    client = ctx.linkedin_client
+    if client:
+        try:
+            logger.debug("Trying linkedin_client.search_companies (cookie-based)")
+            results = await client.search_companies(keywords=keywords, limit=limit)
+            logger.info("Company search completed via linkedin_client", count=len(results))
+            return {
+                "success": True,
+                "results": results,
+                "count": len(results),
+                "source": "linkedin_api",
+                "note": "Using cookie-based linkedin-api. Results may be limited if LinkedIn detects bot activity.",
+            }
+        except Exception as e:
+            sources_tried.append("linkedin_api")
+            errors_encountered.append(f"linkedin-api: {str(e)}")
+            logger.warning("linkedin_client company search failed, trying headless browser", error=str(e))
+
+    # Fall back to headless browser as last resort
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            client = None
+
+    if client:
+        try:
+            logger.debug("Trying headless browser company search")
+            results = await client.search_companies_headless(keywords=keywords, limit=limit)
+            logger.info("Company search completed via headless browser", count=len(results))
+            return {
+                "success": True,
+                "results": results,
+                "count": len(results),
+                "source": "headless_browser",
+            }
+        except Exception as e:
+            sources_tried.append("headless_browser")
+            errors_encountered.append(f"headless_browser: {str(e)}")
+            logger.error("Headless browser company search failed", error=str(e))
+
+    logger.error(
+        "All company search sources failed",
+        sources_tried=sources_tried,
+    )
+    return {
+        "error": "All company search sources failed.",
+        "sources_tried": sources_tried,
+        "diagnostic_info": {
+            "fresh_data_api": "Requires Pro plan ($45/mo) for Search Lead/Company",
+            "linkedin_api": "Cookie-based, subject to LinkedIn bot detection",
+            "headless_browser": "Playwright-based browser fallback",
+            "errors": errors_encountered,
+        },
+        "suggestion": "Configure linkedin-api with session cookies, upgrade Fresh Data API, or ensure playwright is installed.",
+    }
+
+
+# =============================================================================
+# Content Search Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def search_content(
+    keywords: str,
+    date_posted: str = "past-week",
+    limit: int = 20,
+) -> dict:
+    """
+    Search LinkedIn for posts and content by keyword.
+
+    Args:
+        keywords: Search keywords (e.g., "figma console mcp")
+        date_posted: Time filter - "past-24h", "past-week", "past-month", or "" for any time
+        limit: Maximum results to return (default: 20, max: 50)
+
+    Returns posts with author info, engagement metrics, and content preview.
+    """
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+
+    limit = min(limit, 50)
+
+    # Validate date_posted filter
+    valid_date_filters = {"past-24h", "past-week", "past-month", ""}
+    if date_posted not in valid_date_filters:
         return {
-            "error": "LinkedIn company search not available. Fresh Data API search requires Pro plan ($45/mo), and linkedin-api is not configured.",
-            "sources_tried": sources_tried,
-            "suggestion": "Configure linkedin-api with session cookies, or upgrade Fresh Data API to Pro plan for search capabilities.",
+            "error": f"Invalid date_posted value: '{date_posted}'",
+            "valid_values": sorted(valid_date_filters - {""}),
+            "suggestion": "Use 'past-24h', 'past-week', 'past-month', or '' for any time.",
         }
 
+    # Get or create a client (headless browser transport)
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {
+                "error": "LinkedIn client not available. Could not initialize search client.",
+                "suggestion": "Ensure playwright is installed: pip install playwright && playwright install chromium",
+            }
+
     try:
-        logger.debug("Trying linkedin_client.search_companies (cookie-based)")
-        results = await ctx.linkedin_client.search_companies(keywords=keywords, limit=limit)
-        logger.info("Company search completed via linkedin_client", count=len(results))
+        results = await client.search_content(
+            keywords=keywords,
+            date_posted=date_posted,
+            limit=limit,
+        )
         return {
             "success": True,
             "results": results,
             "count": len(results),
-            "source": "linkedin_api",
-            "note": "Using cookie-based linkedin-api. Results may be limited if LinkedIn detects bot activity.",
+            "keywords": keywords,
+            "date_filter": date_posted or "any",
+            "source": "headless_browser",
         }
     except Exception as e:
-        from linkedin_mcp.core.exceptions import format_error_response
-        sources_tried.append("linkedin_api")
-        errors_encountered.append(f"linkedin-api: {str(e)}")
-        logger.error(
-            "All company search sources failed",
-            error=str(e),
-            sources_tried=sources_tried,
-        )
-        error_response = format_error_response(e)
-        error_response["sources_tried"] = sources_tried
-        error_response["diagnostic_info"] = {
-            "fresh_data_api": "Requires Pro plan ($45/mo) for Search Lead/Company",
-            "linkedin_api": "Cookie-based, subject to LinkedIn bot detection",
-            "errors": errors_encountered,
-        }
-        return error_response
+        logger.error("Content search failed", error=str(e), keywords=keywords)
+        return {"error": str(e)}
 
 
 # =============================================================================
@@ -3000,11 +3166,19 @@ async def search_jobs(
             "suggestion": "Set FEATURE_JOBS_ENABLED=true to enable job search tools",
         }
 
-    if not ctx.linkedin_client:
-        return {
-            "error": "LinkedIn client not available. Job search requires cookie-based authentication.",
-            "suggestion": "Configure linkedin-api with session cookies using: linkedin-mcp-auth extract-cookies",
-        }
+    # Get or create a client (headless browser fallback)
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {
+                "error": "LinkedIn client not available. Job search requires cookie-based authentication.",
+                "suggestion": "Configure linkedin-api with session cookies using: linkedin-mcp-auth extract-cookies, or ensure playwright is installed for headless browser fallback.",
+            }
 
     limit = min(limit, 50)
 
@@ -3014,7 +3188,7 @@ async def search_jobs(
     remote_list = [remote] if remote else None
 
     try:
-        results = await ctx.linkedin_client.search_jobs(
+        results = await client.search_jobs(
             keywords=keywords,
             location_name=location_name,
             job_type=job_type_list,
@@ -3306,9 +3480,13 @@ async def get_conversation_details(profile_id: str) -> dict:
 
 
 @mcp.tool()
-async def send_message(recipients: list[str], text: str) -> dict:
+async def send_message(
+    recipients: list[str],
+    text: str,
+    image_path: str | None = None,
+) -> dict:
     """
-    Send a LinkedIn message to one or more recipients.
+    Send a LinkedIn message to one or more recipients. Optionally attach an image.
 
     Args:
         recipients: List of LinkedIn profile public IDs (e.g., ['john-doe', 'jane-smith'])
@@ -3334,26 +3512,121 @@ async def send_message(recipients: list[str], text: str) -> dict:
             "suggestion": "Set FEATURE_MESSAGING_ENABLED=true to enable messaging tools",
         }
 
-    if not ctx.linkedin_client:
-        return {"error": "LinkedIn client not available"}
-
     if not recipients:
         return {"error": "At least one recipient is required"}
 
     if not text or not text.strip():
         return {"error": "Message text cannot be empty"}
 
+    # Get or create a client for messaging (uses headless browser transport)
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {
+                "error": "LinkedIn client not available. Could not initialize messaging client.",
+                "suggestion": "Ensure playwright is installed: pip install playwright && playwright install chromium",
+            }
+
+    # Try the linkedin-api method first, fall back to headless browser
     try:
-        result = await ctx.linkedin_client.send_message(recipients, text)
+        result = await client.send_message(recipients, text)
+        if result.get("success"):
+            return {
+                **result,
+                "source": "linkedin_api",
+            }
+    except Exception:
+        logger.debug("linkedin-api send_message failed, trying headless browser")
+
+    # Fallback: headless browser transport
+    try:
+        result = await client.send_message_headless(text=text, recipients=recipients, image_path=image_path)
         return {
             **result,
-            "source": "linkedin_api",
-            "warning": "Message sent via unofficial API. Use responsibly to avoid account restrictions.",
+            "source": "headless_browser",
         }
     except Exception as e:
         from linkedin_mcp.core.exceptions import format_error_response
 
         logger.error("Failed to send message", error=str(e), recipient_count=len(recipients))
+        return format_error_response(e)
+
+
+@mcp.tool()
+async def reply_to_conversation(
+    conversation_id: str,
+    text: str,
+    image_path: str | None = None,
+) -> dict:
+    """
+    Reply to an existing LinkedIn conversation. Optionally attach an image.
+
+    Use get_conversations to find conversation IDs, then use this tool to reply.
+
+    Args:
+        conversation_id: Conversation URN from get_conversations results
+            (e.g., 'urn:li:msg_conversation:(urn:li:fsd_profile:XXX,2-YYY)')
+        text: Message content to send
+        image_path: Absolute path to an image file to attach (optional)
+
+    Returns success status and details.
+    """
+    from linkedin_mcp.config.settings import get_settings
+    from linkedin_mcp.core.context import get_context
+    from linkedin_mcp.core.logging import get_logger
+
+    logger = get_logger(__name__)
+    ctx = get_context()
+    settings = get_settings()
+
+    if not settings.features.messaging_enabled:
+        return {
+            "error": "Messaging feature is disabled",
+            "suggestion": "Set FEATURE_MESSAGING_ENABLED=true to enable messaging tools",
+        }
+
+    if not conversation_id:
+        return {"error": "conversation_id is required"}
+
+    if not text or not text.strip():
+        return {"error": "Message text cannot be empty"}
+
+    client = ctx.linkedin_client
+    if not client:
+        try:
+            from linkedin_mcp.services.linkedin.client import LinkedInClient
+
+            client = LinkedInClient()
+            await client.initialize()
+        except Exception:
+            return {
+                "error": "LinkedIn client not available. Could not initialize messaging client.",
+                "suggestion": "Ensure playwright is installed: pip install playwright && playwright install chromium",
+            }
+
+    try:
+        result = await client.send_message_headless(
+            text=text,
+            conversation_id=conversation_id,
+            image_path=image_path,
+        )
+        return {
+            **result,
+            "source": "headless_browser",
+        }
+    except Exception as e:
+        from linkedin_mcp.core.exceptions import format_error_response
+
+        logger.error(
+            "Failed to reply to conversation",
+            error=str(e),
+            conversation_id=conversation_id,
+        )
         return format_error_response(e)
 
 

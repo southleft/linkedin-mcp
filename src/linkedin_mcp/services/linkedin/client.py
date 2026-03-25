@@ -464,6 +464,8 @@ class LinkedInClient:
         """
         Get the user's LinkedIn feed.
 
+        Tries the linkedin-api library first, then falls back to headless browser.
+
         Args:
             limit: Maximum number of posts to return
 
@@ -471,7 +473,11 @@ class LinkedInClient:
             List of feed posts
         """
         logger.info("Fetching feed", limit=limit)
-        return await self._execute(self._client.get_feed_posts, limit=limit)
+        try:
+            return await self._execute(self._client.get_feed_posts, limit=limit)
+        except Exception as e:
+            logger.warning("linkedin-api get_feed failed, falling back to headless browser", error=str(e))
+            return await self.get_feed_posts_headless(limit=limit)
 
     async def get_profile_posts(
         self,
@@ -1182,6 +1188,299 @@ class LinkedInClient:
             "recipient_urns": member_urns,
         }
 
+    async def _send_via_ui(
+        self,
+        scraper: Any,
+        text: str,
+        image_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a message using browser UI automation.
+
+        Used when attachments are needed or when API endpoints fail.
+        Assumes the browser is already navigated to the correct conversation thread.
+
+        Args:
+            scraper: HeadlessLinkedInScraper instance.
+            text: Message text (can be empty if only sending an image).
+            image_path: Path to image file to attach.
+
+        Returns:
+            dict with success status.
+        """
+        page = scraper._page
+
+        # Attach image if provided
+        if image_path:
+            import os
+
+            if not os.path.exists(image_path):
+                return {"success": False, "error": f"Image file not found: {image_path}"}
+
+            file_input = await page.query_selector(
+                'input[accept="image/*"].msg-form__attachment-upload-input'
+            )
+            if not file_input:
+                return {"success": False, "error": "Could not find image upload input in messaging UI"}
+
+            await file_input.set_input_files(image_path)
+            logger.info("Image attached", path=image_path)
+            await asyncio.sleep(3)  # Wait for upload to complete
+
+        # Type message text if provided
+        if text and text.strip():
+            msg_input = await page.query_selector(
+                '.msg-form__contenteditable, '
+                '[contenteditable="true"][role="textbox"]'
+            )
+            if msg_input:
+                await msg_input.click()
+                await page.keyboard.type(text, delay=10)
+                await asyncio.sleep(0.5)
+
+        # Click send
+        send_btn = await page.query_selector('.msg-form__send-button')
+        if not send_btn:
+            return {"success": False, "error": "Could not find send button"}
+
+        is_disabled = await send_btn.get_attribute("disabled")
+        if is_disabled:
+            return {"success": False, "error": "Send button is disabled — message or image may not have loaded"}
+
+        await send_btn.click()
+        await asyncio.sleep(3)
+
+        return {
+            "success": True,
+            "message": "Message sent successfully" + (" with image" if image_path else ""),
+            "image_attached": bool(image_path),
+        }
+
+    async def send_message_headless(
+        self,
+        text: str,
+        conversation_id: str | None = None,
+        recipients: list[str] | None = None,
+        image_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a message via the headless browser transport.
+
+        Supports both replying to an existing conversation and starting a new one.
+        Optionally attach an image file.
+
+        Args:
+            text: Message content to send.
+            conversation_id: Conversation URN to reply to (from get_conversations results).
+            recipients: List of profile public IDs for a new message.
+                        Ignored if conversation_id is provided.
+            image_path: Absolute path to an image file to attach (png, jpg, gif, etc.).
+
+        Returns:
+            dict with success status and details.
+        """
+        if not text or not text.strip():
+            return {"success": False, "error": "Message text cannot be empty"}
+
+        if not conversation_id and not recipients:
+            return {"success": False, "error": "Provide either conversation_id or recipients"}
+
+        import uuid as _uuid
+
+        scraper = await self._get_headless_scraper()
+
+        # Get the authenticated user's mailbox URN
+        profile_urn = await self._get_profile_urn()
+        mailbox_urn = f"urn:li:fsd_profile:{profile_urn}"
+
+        if conversation_id:
+            # Reply to existing conversation
+            logger.info("Sending reply via headless browser", conversation_id=conversation_id)
+
+            # Navigate to the conversation thread
+            import re
+
+            thread_match = re.search(r"(2-[A-Za-z0-9+/=]+)", conversation_id)
+            if thread_match:
+                thread_id = thread_match.group(1)
+                page = scraper._page
+                await page.goto(
+                    f"https://www.linkedin.com/messaging/thread/{thread_id}/",
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+                await asyncio.sleep(2)
+
+            if image_path:
+                # Use UI automation for image attachments
+                return await self._send_via_ui(scraper, text, image_path=image_path)
+
+            # Text-only: use the Dash createMessage API endpoint
+            result = await scraper.api_fetch(
+                "https://www.linkedin.com/voyager/api/"
+                "voyagerMessagingDashMessengerMessages?action=createMessage",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+                body={
+                    "message": {
+                        "body": {
+                            "attributes": [],
+                            "text": text,
+                        },
+                        "renderContentUnions": [],
+                        "conversationUrn": conversation_id,
+                        "originToken": str(_uuid.uuid4()),
+                    },
+                    "mailboxUrn": mailbox_urn,
+                    "trackingId": str(_uuid.uuid4())[:16],
+                    "dedupeByClientGeneratedToken": False,
+                },
+            )
+            return {
+                "success": True,
+                "message": "Reply sent successfully",
+                "conversation_id": conversation_id,
+            }
+
+        else:
+            # Send to recipients by public ID
+            logger.info("Sending message via headless browser", recipients=recipients)
+
+            # Strategy 1: Check if an existing conversation exists with any recipient
+            # LinkedIn's new messaging system routes all messages through conversations
+            # First resolve the public ID to a display name for matching
+            recipient_names = {}
+            for public_id in recipients:
+                try:
+                    profile_data = await scraper.api_fetch(
+                        "https://www.linkedin.com/voyager/api/identity/dash/profiles"
+                        f"?q=memberIdentity&memberIdentity={public_id}"
+                        "&decorationId=com.linkedin.voyager.dash.deco.identity.profile"
+                        ".FullProfileWithEntities-91",
+                    )
+                    elements = profile_data.get("elements", [])
+                    if elements:
+                        el = elements[0]
+                        first = el.get("firstName", "")
+                        last = el.get("lastName", "")
+                        urn = el.get("entityUrn", "")
+                        if first or last:
+                            recipient_names[public_id] = {
+                                "name": f"{first} {last}".strip(),
+                                "first": first,
+                                "last": last,
+                                "urn": urn,
+                            }
+                except Exception:
+                    pass
+
+            try:
+                all_convos = await self.get_conversations(limit=50)
+                for public_id in recipients:
+                    name_info = recipient_names.get(public_id, {})
+                    recipient_name = name_info.get("name", "").lower()
+                    recipient_urn = name_info.get("urn", "")
+
+                    for conv in all_convos:
+                        for p in conv.get("participants", []):
+                            p_name = p.get("name", "").lower()
+                            p_url = p.get("profile_url", "")
+
+                            # Match by name, public ID in URL, or URN
+                            if (
+                                (recipient_name and recipient_name == p_name)
+                                or public_id.lower() in p_url.lower()
+                                or (recipient_urn and recipient_urn.split(":")[-1] in p_url)
+                            ):
+                                logger.info(
+                                    "Found existing conversation for recipient",
+                                    public_id=public_id,
+                                    matched_name=p_name,
+                                    conversation_id=conv["conversation_id"],
+                                )
+                                return await self.send_message_headless(
+                                    text=text,
+                                    conversation_id=conv["conversation_id"],
+                                )
+            except Exception as e:
+                logger.debug("Conversation lookup failed", error=str(e))
+
+            # Strategy 2: UI automation for truly new conversations
+            logger.info("No existing conversation found, using UI automation", recipients=recipients)
+
+            page = scraper._page
+            await page.goto(
+                "https://www.linkedin.com/messaging/thread/new/",
+                wait_until="domcontentloaded",
+                timeout=20000,
+            )
+            await asyncio.sleep(2)
+
+            # Type the recipient name in the search field
+            recipient_input = await page.query_selector(
+                'input[name="searchTerm"], '
+                'input[placeholder*="Type a name"], '
+                'input[role="combobox"]'
+            )
+            if not recipient_input:
+                return {
+                    "success": False,
+                    "error": "Could not find recipient input field in messaging UI",
+                }
+
+            await recipient_input.click()
+            await recipient_input.type(recipients[0], delay=50)
+            await asyncio.sleep(2)
+
+            # Select the first matching result
+            result_option = await page.query_selector(
+                '[role="option"], '
+                '.msg-connections-typeahead__search-result, '
+                'li[class*="typeahead"]'
+            )
+            if result_option:
+                await result_option.click()
+                await asyncio.sleep(1)
+            else:
+                return {
+                    "success": False,
+                    "error": f"Could not find recipient '{recipients[0]}' in LinkedIn search",
+                }
+
+            # Type the message
+            msg_input = await page.query_selector(
+                '.msg-form__contenteditable, '
+                '[contenteditable="true"], '
+                '[role="textbox"]'
+            )
+            if not msg_input:
+                return {
+                    "success": False,
+                    "error": "Could not find message input field",
+                }
+
+            await msg_input.click()
+            await page.keyboard.type(text, delay=10)
+            await asyncio.sleep(1)
+
+            # Click send
+            send_btn = await page.query_selector(
+                '.msg-form__send-button, '
+                'button[type="submit"]'
+            )
+            if send_btn:
+                await send_btn.click()
+                await asyncio.sleep(3)
+            else:
+                return {
+                    "success": False,
+                    "error": "Could not find send button",
+                }
+
+            return {
+                "success": True,
+                "message": "Message sent successfully",
+                "recipients": recipients,
+            }
+
     # ==========================================================================
     # Search Methods
     # ==========================================================================
@@ -1693,6 +1992,372 @@ class LinkedInClient:
             "success": True,
             "message": "Conversation marked as seen",
             "conversation_urn": conversation_urn,
+        }
+
+    # ==========================================================================
+    # Headless Browser Search & Feed Methods
+    # ==========================================================================
+
+    async def _headless_api_fetch(self, url: str) -> dict[str, Any]:
+        """Make a Voyager API call via the headless browser.
+
+        Handles rate limiting, scraper initialization, and error classification.
+
+        Args:
+            url: Full URL to fetch via the browser context.
+
+        Returns:
+            Parsed JSON response dict.
+        """
+        await self.rate_limiter.acquire()
+        scraper = await self._get_headless_scraper()
+        try:
+            return await scraper.api_fetch(url)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "rate" in error_str or "limit" in error_str or "429" in error_str:
+                raise LinkedInRateLimitError(str(e), cause=e) from e
+            elif "auth" in error_str or "login" in error_str or "401" in error_str:
+                raise LinkedInAuthError(str(e), cause=e) from e
+            elif isinstance(e, (LinkedInAPIError, LinkedInAuthError, LinkedInRateLimitError)):
+                raise
+            else:
+                raise LinkedInAPIError(str(e), cause=e) from e
+
+    @staticmethod
+    def _build_search_url(
+        keywords: str,
+        result_type: str,
+        start: int = 0,
+        extra_filters: list[tuple[str, str]] | None = None,
+    ) -> str:
+        """Build a Voyager search GraphQL URL.
+
+        Args:
+            keywords: Search query string.
+            result_type: Result type filter (CONTENT, PEOPLE, COMPANIES).
+            start: Pagination offset.
+            extra_filters: Additional (key, value) filter pairs.
+
+        Returns:
+            Fully constructed search URL.
+        """
+        filters = [f"(key:resultType,value:List({result_type}))"]
+        if extra_filters:
+            for key, value in extra_filters:
+                filters.append(f"(key:{key},value:List({value}))")
+        filters_str = ",".join(filters)
+
+        encoded_keywords = quote(keywords, safe="")
+
+        variables = (
+            f"(start:{start},origin:FACETED_SEARCH,"
+            f"query:(keywords:{encoded_keywords},"
+            f"flagshipSearchIntent:SEARCH_SRP,"
+            f"queryParameters:List({filters_str}),"
+            f"includeFiltersInResponse:false))"
+        )
+        query_id = "voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0"
+        return (
+            f"https://www.linkedin.com/voyager/api/graphql"
+            f"?variables={variables}&queryId={query_id}"
+        )
+
+    @staticmethod
+    def _extract_search_results(data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract entity results from a Voyager search response.
+
+        Args:
+            data: Raw JSON response from the search endpoint.
+
+        Returns:
+            List of raw entityResult dicts.
+        """
+        results: list[dict[str, Any]] = []
+        root = data.get("data", data)
+        clusters = root.get("searchDashClustersByAll", {})
+        for cluster in clusters.get("elements", []):
+            for item_wrapper in cluster.get("items", []):
+                item = item_wrapper.get("item", {})
+                entity = item.get("entityResult")
+                if entity:
+                    results.append(entity)
+        return results
+
+    async def search_content(
+        self,
+        keywords: str,
+        date_posted: str = "past-week",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Search LinkedIn posts/content by keyword via headless browser.
+
+        Args:
+            keywords: Search query string.
+            date_posted: Time filter - "past-24h", "past-week", "past-month", or "" for any.
+            limit: Maximum results to return.
+
+        Returns:
+            List of normalized content result dicts.
+        """
+        logger.info("Searching content via headless browser", keywords=keywords, limit=limit)
+
+        extra_filters: list[tuple[str, str]] = []
+        if date_posted:
+            extra_filters.append(("datePosted", date_posted))
+
+        all_results: list[dict[str, Any]] = []
+        start = 0
+        page_size = min(limit, 20)
+
+        while len(all_results) < limit:
+            url = self._build_search_url(
+                keywords=keywords,
+                result_type="CONTENT",
+                start=start,
+                extra_filters=extra_filters,
+            )
+            data = await self._headless_api_fetch(url)
+            entities = self._extract_search_results(data)
+
+            if not entities:
+                break
+
+            for entity in entities:
+                if len(all_results) >= limit:
+                    break
+                all_results.append(self._normalize_content_result(entity))
+
+            start += page_size
+
+        logger.info("Content search completed", count=len(all_results))
+        return all_results
+
+    @staticmethod
+    def _normalize_content_result(entity: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a content search entity into a clean dict.
+
+        Args:
+            entity: Raw entityResult from the search response.
+
+        Returns:
+            Normalized dict with title, text_preview, author info, and metrics.
+        """
+        title_obj = entity.get("title", {})
+        summary_obj = entity.get("summary", {})
+        nav_url = entity.get("navigationUrl", "")
+
+        # Extract insight text (often contains engagement info)
+        insights = entity.get("insightsResolutionResults", [])
+        reactions_count = 0
+        comments_count = 0
+        reposts_count = 0
+
+        # Try to extract metrics from insights or socialActivityCounts
+        social_counts = entity.get("socialActivityCountsInsight", {})
+        if social_counts:
+            reactions_count = social_counts.get("numLikes", 0)
+            comments_count = social_counts.get("numComments", 0)
+            reposts_count = social_counts.get("numShares", 0)
+
+        # Extract author from actorNavigationContext or primarySubtitle
+        actor = entity.get("actorNavigationContext", {})
+        author_name = actor.get("title", "")
+        author_headline = ""
+        primary_subtitle = entity.get("primarySubtitle", {})
+        if primary_subtitle:
+            author_headline = primary_subtitle.get("text", "")
+
+        # If no author from actor, try title for name
+        if not author_name:
+            secondary = entity.get("secondarySubtitle", {})
+            if secondary:
+                author_name = secondary.get("text", "")
+
+        return {
+            "title": title_obj.get("text", "") if isinstance(title_obj, dict) else str(title_obj),
+            "text_preview": summary_obj.get("text", "") if isinstance(summary_obj, dict) else str(summary_obj),
+            "author_name": author_name,
+            "author_headline": author_headline,
+            "url": nav_url,
+            "reactions_count": reactions_count,
+            "comments_count": comments_count,
+            "reposts_count": reposts_count,
+            "posted_at": entity.get("actorNavigationContext", {}).get("subtitle", ""),
+        }
+
+    async def get_feed_posts_headless(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Get the authenticated user's feed via headless browser.
+
+        Falls back to this when the linkedin-api get_feed_posts method fails.
+
+        Args:
+            limit: Maximum number of feed posts to return.
+
+        Returns:
+            List of raw feed post dicts from the Voyager API.
+        """
+        logger.info("Fetching feed via headless browser", limit=limit)
+
+        url = (
+            "https://www.linkedin.com/voyager/api/graphql"
+            "?variables=(count:{count},start:0)"
+            "&queryId=voyagerFeedDashTimeline"
+            ".d805e081daaa77c0cd24e75e44580fa8"
+        ).format(count=limit)
+
+        data = await self._headless_api_fetch(url)
+
+        # Parse feed response
+        root = data.get("data", data)
+        timeline = root.get("feedDashTimelineByType", root.get("*elements", {}))
+        elements = []
+        if isinstance(timeline, dict):
+            elements = timeline.get("elements", [])
+        elif isinstance(timeline, list):
+            elements = timeline
+
+        posts: list[dict[str, Any]] = []
+        for el in elements:
+            if len(posts) >= limit:
+                break
+            posts.append(el)
+
+        logger.info("Feed fetched via headless browser", count=len(posts))
+        return posts
+
+    async def search_people_headless(
+        self,
+        keywords: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search for people via headless browser.
+
+        Args:
+            keywords: Search query string.
+            limit: Maximum results to return.
+
+        Returns:
+            List of normalized people search results.
+        """
+        logger.info("Searching people via headless browser", keywords=keywords, limit=limit)
+
+        all_results: list[dict[str, Any]] = []
+        start = 0
+        page_size = min(limit, 10)
+
+        while len(all_results) < limit:
+            url = self._build_search_url(
+                keywords=keywords,
+                result_type="PEOPLE",
+                start=start,
+            )
+            data = await self._headless_api_fetch(url)
+            entities = self._extract_search_results(data)
+
+            if not entities:
+                break
+
+            for entity in entities:
+                if len(all_results) >= limit:
+                    break
+                all_results.append(self._normalize_people_result(entity))
+
+            start += page_size
+
+        logger.info("People search via headless completed", count=len(all_results))
+        return all_results
+
+    @staticmethod
+    def _normalize_people_result(entity: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a people search entity into a clean dict."""
+        title_obj = entity.get("title", {})
+        name = title_obj.get("text", "") if isinstance(title_obj, dict) else str(title_obj)
+
+        primary_subtitle = entity.get("primarySubtitle", {})
+        headline = primary_subtitle.get("text", "") if isinstance(primary_subtitle, dict) else ""
+
+        secondary_subtitle = entity.get("secondarySubtitle", {})
+        location = secondary_subtitle.get("text", "") if isinstance(secondary_subtitle, dict) else ""
+
+        nav_url = entity.get("navigationUrl", "")
+        entity_urn = entity.get("entityUrn", "")
+
+        return {
+            "name": name,
+            "headline": headline,
+            "location": location,
+            "profile_url": nav_url,
+            "urn": entity_urn,
+        }
+
+    async def search_companies_headless(
+        self,
+        keywords: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search for companies via headless browser.
+
+        Args:
+            keywords: Search query string.
+            limit: Maximum results to return.
+
+        Returns:
+            List of normalized company search results.
+        """
+        logger.info("Searching companies via headless browser", keywords=keywords, limit=limit)
+
+        all_results: list[dict[str, Any]] = []
+        start = 0
+        page_size = min(limit, 10)
+
+        while len(all_results) < limit:
+            url = self._build_search_url(
+                keywords=keywords,
+                result_type="COMPANIES",
+                start=start,
+            )
+            data = await self._headless_api_fetch(url)
+            entities = self._extract_search_results(data)
+
+            if not entities:
+                break
+
+            for entity in entities:
+                if len(all_results) >= limit:
+                    break
+                all_results.append(self._normalize_company_result(entity))
+
+            start += page_size
+
+        logger.info("Company search via headless completed", count=len(all_results))
+        return all_results
+
+    @staticmethod
+    def _normalize_company_result(entity: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a company search entity into a clean dict."""
+        title_obj = entity.get("title", {})
+        name = title_obj.get("text", "") if isinstance(title_obj, dict) else str(title_obj)
+
+        primary_subtitle = entity.get("primarySubtitle", {})
+        industry = primary_subtitle.get("text", "") if isinstance(primary_subtitle, dict) else ""
+
+        secondary_subtitle = entity.get("secondarySubtitle", {})
+        info = secondary_subtitle.get("text", "") if isinstance(secondary_subtitle, dict) else ""
+
+        summary_obj = entity.get("summary", {})
+        description = summary_obj.get("text", "") if isinstance(summary_obj, dict) else ""
+
+        nav_url = entity.get("navigationUrl", "")
+        entity_urn = entity.get("entityUrn", "")
+
+        return {
+            "name": name,
+            "industry": industry,
+            "info": info,
+            "description": description,
+            "company_url": nav_url,
+            "urn": entity_urn,
         }
 
     # ==========================================================================

@@ -422,6 +422,7 @@ class HeadlessLinkedInScraper:
         url: str,
         headers: dict | None = None,
         method: str = "GET",
+        body: dict | None = None,
     ) -> dict:
         """Make an API call through the browser context.
 
@@ -433,6 +434,7 @@ class HeadlessLinkedInScraper:
             url: Full URL or path (e.g., '/voyager/api/me')
             headers: Additional headers to include
             method: HTTP method (default: GET)
+            body: JSON body for POST/PUT requests (will be serialized)
 
         Returns:
             Parsed JSON response dict
@@ -474,11 +476,16 @@ class HeadlessLinkedInScraper:
                         ...config.headers
                     };
 
-                    const resp = await fetch(config.url, {
+                    const fetchOpts = {
                         method: config.method,
                         headers,
                         credentials: 'include'
-                    });
+                    };
+                    if (config.body) {
+                        fetchOpts.body = JSON.stringify(config.body);
+                    }
+
+                    const resp = await fetch(config.url, fetchOpts);
 
                     let data;
                     const contentType = resp.headers.get('content-type') || '';
@@ -504,10 +511,11 @@ class HeadlessLinkedInScraper:
             }
         """
 
-        result = await self._page.evaluate(
-            js_function,
-            {"url": url, "method": method, "headers": extra_headers},
-        )
+        config = {"url": url, "method": method, "headers": extra_headers}
+        if body is not None:
+            config["body"] = body
+
+        result = await self._page.evaluate(js_function, config)
 
         # Handle network-level errors
         if result.get("error"):
@@ -539,10 +547,7 @@ class HeadlessLinkedInScraper:
                 await self.ensure_authenticated()
 
             # Retry the fetch once
-            result = await self._page.evaluate(
-                js_function,
-                {"url": url, "method": method, "headers": extra_headers},
-            )
+            result = await self._page.evaluate(js_function, config)
 
             status = result.get("status", 0)
             if not result.get("ok"):
