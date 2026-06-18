@@ -51,7 +51,7 @@ dependencies = [
     "structlog>=24.4.0",
     "tenacity>=9.0.0",
     "python-dateutil>=2.9.0",
-    "cryptography>=44.0.0",
+    "cryptography>=48.0.1",
 
     # Secure Token Storage
     "keyring>=25.0.0",
