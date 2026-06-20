@@ -37,7 +37,7 @@ dependencies = [
 
     # Configuration & Validation
     "pydantic>=2.10.0",
-    "pydantic-settings>=2.6.0",
+    "pydantic-settings>=2.14.2",
     "python-dotenv>=1.0.1",
 
     # HTTP & Async
