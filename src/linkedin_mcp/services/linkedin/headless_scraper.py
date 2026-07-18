@@ -11,7 +11,9 @@ falls back to standard Playwright with stealth configuration.
 
 import asyncio
 import json
+import os
 import random
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +130,18 @@ class HeadlessLinkedInScraper:
         self._page = None
         self._initialized = False
         self._authenticated = False
+
+    @staticmethod
+    def _has_display() -> bool:
+        """Whether a graphical display is available for a headed browser.
+
+        macOS/Windows always have a display. On Linux we require DISPLAY (X11)
+        or WAYLAND_DISPLAY to be set, otherwise launching a headed browser
+        crashes with a "missing X server" error.
+        """
+        if sys.platform in ("win32", "darwin"):
+            return True
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
     async def initialize(self, headless: bool | None = None) -> None:
         """Initialize the browser with stealth configuration.
@@ -249,6 +263,18 @@ class HeadlessLinkedInScraper:
 
         # Session expired — need interactive login
         logger.warning("LinkedIn session expired, interactive login required")
+
+        # On a headless server (no display) we cannot open a visible browser for
+        # login. Fail with an actionable message instead of crashing deep inside
+        # Chromium with a cryptic "missing X server" error.
+        if not self._has_display():
+            raise BrowserAutomationError(
+                "LinkedIn browser session is not authenticated and no graphical "
+                "display is available for interactive login. Set LI_AT and optionally "
+                "JSESSIONID, or import them with `linkedin-mcp-auth import-cookies`, "
+                "then restart the server.",
+                details={"current_url": current_url},
+            )
 
         # Close current browser and relaunch VISIBLE for login
         await self.close()

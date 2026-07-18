@@ -22,7 +22,7 @@ mcp = FastMCP(
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def debug_context() -> dict:
     """
     Debug tool to check the internal state of the MCP server.
@@ -115,7 +115,7 @@ async def debug_context() -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_my_profile() -> dict:
     """
     Get the authenticated user's LinkedIn profile.
@@ -204,7 +204,7 @@ async def get_my_profile() -> dict:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile(
     profile_id: str,
     use_cache: bool = True,
@@ -381,7 +381,7 @@ async def get_profile(
         }
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_contact_info(profile_id: str) -> dict:
     """
     Get contact information for a LinkedIn profile.
@@ -408,7 +408,7 @@ async def get_profile_contact_info(profile_id: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_skills(profile_id: str) -> dict:
     """
     Get skills and endorsements for a LinkedIn profile.
@@ -469,7 +469,7 @@ async def get_profile_skills(profile_id: str) -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_interests(profile_id: str) -> dict:
     """
     Get profile interests including influencers, companies, groups, and topics.
@@ -519,7 +519,7 @@ async def get_profile_interests(profile_id: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_similar_profiles(profile_id: str, limit: int = 10) -> dict:
     """
     Get profiles similar to a given profile.
@@ -577,7 +577,7 @@ async def get_similar_profiles(profile_id: str, limit: int = 10) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_articles(profile_id: str, limit: int = 20) -> dict:
     """
     Get articles written by a LinkedIn profile.
@@ -635,7 +635,7 @@ async def get_profile_articles(profile_id: str, limit: int = 20) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_article(article_url: str) -> dict:
     """
     Get the full content of a LinkedIn article.
@@ -687,7 +687,7 @@ async def get_article(article_url: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_company_by_domain(domain: str) -> dict:
     """
     Get company information by website domain.
@@ -740,7 +740,7 @@ async def get_company_by_domain(domain: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_network_stats() -> dict:
     """
     Get statistics about the authenticated user's LinkedIn network.
@@ -804,7 +804,7 @@ async def get_network_stats() -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def batch_get_profiles(profile_ids: str) -> dict:
     """
     Get multiple LinkedIn profiles efficiently.
@@ -865,7 +865,7 @@ async def batch_get_profiles(profile_ids: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_cache_stats() -> dict:
     """
     Get cache statistics and performance metrics.
@@ -883,7 +883,7 @@ async def get_cache_stats() -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_feed(limit: int = 10, use_cache: bool = True) -> dict:
     """
     Get the authenticated user's LinkedIn feed.
@@ -933,7 +933,7 @@ async def get_feed(limit: int = 10, use_cache: bool = True) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_posts(profile_id: str, limit: int = 10, use_cache: bool = True) -> dict:
     """
     Get posts from a specific LinkedIn profile.
@@ -1836,7 +1836,7 @@ async def delete_comment(
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_comments_official(
     post_urn: str,
     start: int = 0,
@@ -2018,7 +2018,7 @@ async def delete_reaction(
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_auth_status() -> dict:
     """
     Get LinkedIn authentication status for both official and unofficial APIs.
@@ -2117,7 +2117,7 @@ async def get_auth_status() -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_ads(
     keyword: str | None = None,
     advertiser: str | None = None,
@@ -2183,7 +2183,7 @@ async def search_ads(
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_ads_by_advertiser(
     advertiser_name: str,
     country: str | None = None,
@@ -2236,7 +2236,7 @@ async def search_ads_by_advertiser(
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_ads_by_keyword(
     keyword: str,
     country: str | None = None,
@@ -2294,7 +2294,7 @@ async def search_ads_by_keyword(
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_draft_content(content: str, industry: str | None = None) -> dict:
     """
     Analyze draft content and get suggestions for improvement.
@@ -2344,7 +2344,7 @@ async def create_draft(
     return {"success": True, "draft": draft}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def list_drafts(tag: str | None = None) -> dict:
     """
     List all content drafts.
@@ -2363,7 +2363,7 @@ async def list_drafts(tag: str | None = None) -> dict:
     return {"success": True, "drafts": drafts, "count": len(drafts)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_draft(draft_id: str) -> dict:
     """
     Get a specific draft by ID.
@@ -2545,7 +2545,7 @@ async def schedule_post(
     return {"success": True, "scheduled_post": post}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def list_scheduled_posts(status: str | None = None) -> dict:
     """
     List all scheduled posts.
@@ -2564,7 +2564,7 @@ async def list_scheduled_posts(status: str | None = None) -> dict:
     return {"success": True, "scheduled_posts": posts, "count": len(posts)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_scheduled_post(job_id: str) -> dict:
     """
     Get a specific scheduled post.
@@ -2656,7 +2656,7 @@ async def update_scheduled_post(
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_post_reactions(post_urn: str) -> dict:
     """
     Get reactions/likes on a specific post.
@@ -2712,7 +2712,7 @@ async def get_post_reactions(post_urn: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_post_comments(post_urn: str, limit: int = 50) -> dict:
     """
     Get comments on a specific post.
@@ -2785,7 +2785,7 @@ async def get_post_comments(post_urn: str, limit: int = 50) -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_people(
     keywords: str | None = None,
     limit: int = 10,
@@ -2934,7 +2934,7 @@ async def search_people(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_companies(keywords: str, limit: int = 10) -> dict:
     """
     Search for companies on LinkedIn.
@@ -3053,7 +3053,7 @@ async def search_companies(keywords: str, limit: int = 10) -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_content(
     keywords: str,
     date_posted: str = "past-week",
@@ -3124,7 +3124,7 @@ async def search_content(
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def search_jobs(
     keywords: str | None = None,
     location_name: str | None = None,
@@ -3213,7 +3213,7 @@ async def search_jobs(
         return format_error_response(e)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_job(job_id: str) -> dict:
     """
     Get detailed information about a specific job posting.
@@ -3249,7 +3249,7 @@ async def get_job(job_id: str) -> dict:
         return format_error_response(e)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_job_skills(job_id: str) -> dict:
     """
     Get skills required for a job posting.
@@ -3285,7 +3285,7 @@ async def get_job_skills(job_id: str) -> dict:
         return format_error_response(e)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_views() -> dict:
     """
     Get profile view statistics for the authenticated user.
@@ -3319,7 +3319,7 @@ async def get_profile_views() -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_conversations(limit: int = 20, search: str | None = None) -> dict:
     """
     Get your LinkedIn messaging conversations.
@@ -3380,7 +3380,7 @@ async def get_conversations(limit: int = 20, search: str | None = None) -> dict:
         return format_error_response(e)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_conversation(
     conversation_id: str,
     before_timestamp: int | None = None,
@@ -3437,7 +3437,7 @@ async def get_conversation(
         return format_error_response(e)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_conversation_details(profile_id: str) -> dict:
     """
     Get conversation ID and details for a specific profile.
@@ -3671,7 +3671,7 @@ async def mark_conversation_as_seen(conversation_urn: str) -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_invitations(limit: int = 50) -> dict:
     """
     Get pending connection invitations you've received.
@@ -3856,7 +3856,7 @@ async def remove_connection(profile_id: str) -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_company(public_id: str) -> dict:
     """
     Get detailed company information.
@@ -3894,7 +3894,7 @@ async def get_company(public_id: str) -> dict:
         return format_error_response(e)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_company_updates(public_id: str, limit: int = 10) -> dict:
     """
     Get recent posts/updates from a company page.
@@ -3932,7 +3932,7 @@ async def get_company_updates(public_id: str, limit: int = 10) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_organization_followers(organization_id: str) -> dict:
     """
     Get follower count for an organization using the Community Management API.
@@ -3985,7 +3985,7 @@ async def get_organization_followers(organization_id: str) -> dict:
 # Note: get_profile_contact_info and get_profile_skills are defined in Profile Tools section
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_school(public_id: str) -> dict:
     """
     Get school/university information.
@@ -4017,7 +4017,7 @@ async def get_school(public_id: str) -> dict:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_post_analytics(post_urn: str) -> dict:
     """
     Get analytics for a specific post.
@@ -4065,7 +4065,7 @@ async def get_post_analytics(post_urn: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_rate_limit_status() -> dict:
     """
     Get current rate limit status.
@@ -4089,7 +4089,7 @@ async def get_rate_limit_status() -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_engagement(post_urn: str, follower_count: int | None = None) -> dict:
     """
     Perform deep engagement analysis on a specific post.
@@ -4151,7 +4151,7 @@ async def analyze_engagement(post_urn: str, follower_count: int | None = None) -
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_content_performance(profile_id: str, post_limit: int = 20) -> dict:
     """
     Analyze content performance patterns for a profile.
@@ -4197,7 +4197,7 @@ async def analyze_content_performance(profile_id: str, post_limit: int = 20) -> 
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_optimal_posting_times(profile_id: str, post_limit: int = 30) -> dict:
     """
     Analyze optimal posting times based on engagement patterns.
@@ -4243,7 +4243,7 @@ async def analyze_optimal_posting_times(profile_id: str, post_limit: int = 30) -
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_post_audience(post_urn: str) -> dict:
     """
     Analyze the audience engaging with a specific post.
@@ -4286,7 +4286,7 @@ async def analyze_post_audience(post_urn: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_hashtag_performance(profile_id: str, post_limit: int = 30) -> dict:
     """
     Analyze hashtag usage and performance.
@@ -4394,7 +4394,7 @@ async def analyze_hashtag_performance(profile_id: str, post_limit: int = 30) -> 
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> dict:
     """
     Generate a comprehensive engagement report for a profile.
@@ -4501,7 +4501,7 @@ async def generate_engagement_report(profile_id: str, post_limit: int = 20) -> d
 # for accurate analytics on the authenticated user's own content.
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_my_posts(count: int = 50) -> dict:
     """
     Get your own LinkedIn posts.
@@ -4576,7 +4576,7 @@ async def get_my_posts(count: int = 50) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_my_post_analytics(post_urns: list[str] | None = None, limit: int = 10) -> dict:
     """
     Get analytics for your own posts using the Official API.
@@ -4665,7 +4665,7 @@ async def get_my_post_analytics(post_urns: list[str] | None = None, limit: int =
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def analyze_my_content_performance(post_limit: int = 30) -> dict:
     """
     Analyze your content performance comprehensively.
@@ -4752,7 +4752,7 @@ async def analyze_my_content_performance(post_limit: int = 30) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_my_posting_recommendations(post_limit: int = 30) -> dict:
     """
     Get personalized posting recommendations based on your content performance.
@@ -4856,7 +4856,7 @@ async def get_my_posting_recommendations(post_limit: int = 30) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def generate_my_content_calendar(weeks: int = 4, posts_per_week: int = 3) -> dict:
     """
     Generate a content calendar based on your performance data.
@@ -5010,7 +5010,7 @@ async def generate_my_content_calendar(weeks: int = 4, posts_per_week: int = 3) 
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_sections() -> dict:
     """
     Get all editable profile sections with current content.
@@ -5034,7 +5034,7 @@ async def get_profile_sections() -> dict:
     return await manager.get_profile_sections()
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_profile_completeness() -> dict:
     """
     Calculate profile completeness score with improvement suggestions.
@@ -5178,7 +5178,7 @@ async def add_profile_skill(skill_name: str) -> dict:
     return await manager.add_skill(skill_name)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def check_browser_automation_status() -> dict:
     """
     Check if browser automation is available for profile updates.

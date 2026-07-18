@@ -8,9 +8,10 @@ Provides commands for:
 """
 
 import argparse
+import getpass
+import os
 import sys
 from datetime import datetime
-from pathlib import Path
 
 from linkedin_mcp.config.settings import get_settings
 from linkedin_mcp.core.logging import configure_logging, get_logger
@@ -147,7 +148,13 @@ def cmd_oauth(args: argparse.Namespace) -> int:
 
     # Start authentication
     # Pass force_consent=True when --force flag is used to show consent screen
-    if client.authenticate_interactive(timeout=args.timeout, force_consent=args.force):
+    if args.manual:
+        authenticated = client.authenticate_manual(force_consent=args.force)
+    else:
+        authenticated = client.authenticate_interactive(
+            timeout=args.timeout, force_consent=args.force
+        )
+    if authenticated:
         # Store token
         token_data = TokenData(
             access_token=client._access_token,
@@ -286,6 +293,35 @@ def cmd_extract_cookies(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_import_cookies(_args: argparse.Namespace) -> int:
+    """Import LinkedIn cookies without requiring a local browser."""
+    print("\n=== LinkedIn Cookie Import ===\n")
+
+    li_at = os.environ.get("LI_AT") or getpass.getpass("li_at cookie: ")
+    jsessionid = os.environ.get("JSESSIONID")
+    if jsessionid is None:
+        jsessionid = getpass.getpass("JSESSIONID cookie (optional): ")
+
+    li_at = li_at.strip()
+    jsessionid = jsessionid.strip().strip('"') or None
+    if not li_at:
+        print("❌ The li_at cookie is required.")
+        return 1
+
+    cookies = CookieData(
+        li_at=li_at,
+        jsessionid=jsessionid,
+        browser="manual",
+    )
+    if not store_unofficial_cookies(cookies):
+        print("❌ Failed to store cookies in the configured keyring.")
+        return 1
+
+    print("✅ Cookies imported successfully.")
+    print("   Cookies stored in the configured keyring")
+    return 0
+
+
 def cmd_logout(args: argparse.Namespace) -> int:
     """Clear stored credentials."""
     print("\n=== LinkedIn MCP Logout ===\n")
@@ -340,6 +376,12 @@ def main() -> int:
         action="store_true",
         help="Include Community Management API scope (w_member_social_feed) for comments/reactions",
     )
+    oauth_parser.add_argument(
+        "--manual",
+        "-m",
+        action="store_true",
+        help="Headless flow: print the URL and paste back the code (no callback server / SSH tunnel)",
+    )
     oauth_parser.set_defaults(func=cmd_oauth)
 
     # Extract cookies command
@@ -359,6 +401,13 @@ def main() -> int:
         help="Browser to extract cookies from (default: chrome)",
     )
     extract_parser.set_defaults(func=cmd_extract_cookies)
+
+    # Import cookies command
+    import_parser = subparsers.add_parser(
+        "import-cookies",
+        help="Import cookies manually or from LI_AT and JSESSIONID",
+    )
+    import_parser.set_defaults(func=cmd_import_cookies)
 
     # Logout command
     logout_parser = subparsers.add_parser("logout", help="Clear stored credentials")

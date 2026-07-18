@@ -7,6 +7,7 @@ with session persistence, rate limiting, and retry logic.
 
 import asyncio
 import json
+import os
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -349,8 +350,37 @@ class LinkedInClient:
 
         # Persistent session directory — survives MCP server restarts
         scraper = HeadlessLinkedInScraper()
-        # Authentication is handled lazily by ensure_authenticated() on first api_fetch()
 
+        # Seed the browser session with configured cookies so it can authenticate
+        # without an interactive (headed) login. The persisted browser session
+        # does not always carry the li_at auth cookie, which would otherwise
+        # force ensure_authenticated() into opening a visible browser — and that
+        # crashes on headless servers with no X display.
+        from linkedin_mcp.services.storage.token_storage import get_unofficial_cookies
+
+        cookies = get_unofficial_cookies()
+        environment_li_at = os.environ.get("LI_AT")
+        if environment_li_at:
+            li_at = environment_li_at
+            jsessionid = os.environ.get("JSESSIONID")
+            source = "environment"
+        else:
+            li_at = cookies.li_at if cookies else None
+            jsessionid = cookies.jsessionid if cookies else None
+            source = "keyring"
+
+        if li_at:
+            await scraper.initialize()
+            await scraper.set_cookies(li_at=li_at, jsessionid=jsessionid)
+            logger.info("Seeded messaging browser session from cookies", source=source)
+        else:
+            logger.warning(
+                "No li_at cookie available to seed messaging browser session; "
+                "ensure_authenticated() may require interactive login"
+            )
+
+        # Any remaining authentication is handled lazily by ensure_authenticated()
+        # on the first api_fetch().
         self._headless_scraper = scraper
         return scraper
 
@@ -1211,9 +1241,7 @@ class LinkedInClient:
 
         # Attach image if provided
         if image_path:
-            import os
-
-            if not os.path.exists(image_path):
+            if not Path(image_path).exists():
                 return {"success": False, "error": f"Image file not found: {image_path}"}
 
             file_input = await page.query_selector(
