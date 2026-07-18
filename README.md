@@ -249,9 +249,15 @@ These features use LinkedIn's internal (unofficial) API, which requires your bro
 ```bash
 # Extract cookies from your browser (after logging into LinkedIn)
 linkedin-mcp-auth extract-cookies --browser chrome
+
+# On a host without a local browser, enter cookies securely at the prompts
+linkedin-mcp-auth import-cookies
 ```
 
 Supported browsers: Chrome, Arc, Brave, Edge, Firefox, Opera, Opera GX, Vivaldi, Chromium, Safari, LibreWolf.
+
+For non-interactive deployments, `LI_AT` and optional `JSESSIONID` environment
+variables can initialize the messaging browser directly.
 
 > **Note**: Browser cookies expire every 24-48 hours. You'll need to re-run the extract command periodically. If messaging or connection features stop working, refresh your cookies first.
 
@@ -310,6 +316,9 @@ THIRDPARTY_RAPIDAPI_KEY=your_api_key
 ```bash
 # Authenticate with LinkedIn (opens browser for OAuth flow)
 linkedin-mcp-auth oauth
+
+# On a headless host, open the printed URL elsewhere and paste back the redirect
+linkedin-mcp-auth oauth --manual
 
 # Optional: Include Community Management API scope for comments/reactions
 linkedin-mcp-auth oauth --community-management
@@ -552,8 +561,10 @@ Would you like more details or to search for employees?
 # Authentication
 linkedin-mcp-auth status              # Check auth status
 linkedin-mcp-auth oauth               # Authenticate via OAuth
+linkedin-mcp-auth oauth --manual      # Authenticate without a local browser
 linkedin-mcp-auth oauth --force       # Force re-authentication
 linkedin-mcp-auth extract-cookies     # Extract session cookies
+linkedin-mcp-auth import-cookies      # Import cookies without a local browser
 linkedin-mcp-auth logout --all        # Clear all credentials
 
 # Server
@@ -570,6 +581,8 @@ python -m linkedin_mcp                # Alternative server start
 | `LINKEDIN_CLIENT_ID` | - | OAuth Client ID (required for posting) |
 | `LINKEDIN_CLIENT_SECRET` | - | OAuth Client Secret (required for posting) |
 | `LINKEDIN_API_ENABLED` | `false` | Enable API features |
+| `LI_AT` | - | LinkedIn session cookie for non-interactive messaging authentication |
+| `JSESSIONID` | - | Optional LinkedIn CSRF cookie used with `LI_AT` |
 | `THIRDPARTY_RAPIDAPI_KEY` | - | API key for enhanced profile data |
 | `MCP_TRANSPORT` | `stdio` | Transport: stdio, streamable-http |
 | `MCP_HOST` | `127.0.0.1` | HTTP server host |

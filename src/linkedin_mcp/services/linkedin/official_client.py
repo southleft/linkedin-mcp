@@ -6,6 +6,7 @@ providing reliable access to user profile data without the challenges
 of the unofficial Voyager API.
 """
 import json
+import sys
 import time
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -363,13 +364,17 @@ class LinkedInOfficialClient:
         Returns:
             True if authentication was successful
         """
+        import os
         import secrets
         state = secrets.token_urlsafe(16)
 
-        # Parse the redirect URI to get host and port
+        # The listener always binds locally. When redirect_uri is a public HTTPS
+        # URL (e.g. https://mcp.example.com/callback), a reverse proxy forwards
+        # /callback here, so we must NOT try to bind the public hostname.
+        # Use LINKEDIN_CALLBACK_PORT to match the proxy's upstream port.
+        host = "127.0.0.1"
         parsed = urlparse(self.redirect_uri)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 8765
+        port = int(os.environ.get("LINKEDIN_CALLBACK_PORT") or parsed.port or 8765)
 
         # Create callback server
         server = HTTPServer((host, port), OAuthCallbackHandler)
@@ -381,6 +386,10 @@ class LinkedInOfficialClient:
         # Generate auth URL and open browser
         auth_url = self.get_authorization_url(state, force_consent=force_consent)
         logger.info("Opening browser for LinkedIn authentication...")
+        # Print the URL so headless/SSH sessions (no local browser) can open it
+        # manually — e.g. on a laptop that SSH-forwards localhost:8765 to this host.
+        print("\nOpen this URL in a browser to authorize:\n", file=sys.stderr)
+        print(f"    {auth_url}\n", file=sys.stderr)
         webbrowser.open(auth_url)
 
         # Wait for callback
@@ -417,6 +426,55 @@ class LinkedInOfficialClient:
 
         logger.error("OAuth authentication timed out")
         return False
+
+    def authenticate_manual(self, force_consent: bool = False) -> bool:
+        """
+        Headless OAuth flow with no local callback server.
+
+        Prints the authorization URL, the user opens it in any browser and
+        approves, then pastes back the redirected URL (or bare ?code=...).
+        No listener and no SSH tunnel are needed — useful on remote servers.
+
+        Args:
+            force_consent: If True, forces LinkedIn to show the consent screen
+
+        Returns:
+            True if authentication was successful
+        """
+        import secrets
+
+        state = secrets.token_urlsafe(16)
+        auth_url = self.get_authorization_url(state, force_consent=force_consent)
+
+        print("\n1. Open this URL in any browser and approve access:\n", file=sys.stderr)
+        print(f"    {auth_url}\n", file=sys.stderr)
+        print(
+            f"2. Your browser will be redirected to {self.redirect_uri} — it may show\n"
+            "   a connection error, that's fine. Copy the FULL address from the bar\n"
+            "   (or just the code=... value) and paste it here.\n",
+            file=sys.stderr,
+        )
+
+        pasted = input("Paste redirected URL or code: ").strip()
+
+        # Accept either a full redirect URL or a bare code.
+        code = pasted
+        returned_state = None
+        if "code=" in pasted:
+            query = urlparse(pasted).query or pasted.split("?", 1)[-1]
+            params = parse_qs(query)
+            code = (params.get("code") or [""])[0]
+            returned_state = (params.get("state") or [None])[0]
+
+        if not code:
+            logger.error("No authorization code found in the pasted value")
+            return False
+
+        if returned_state is not None and returned_state != state:
+            logger.error("OAuth state mismatch - possible CSRF attack")
+            return False
+
+        return self.exchange_code(code)
 
     def exchange_code(self, code: str) -> bool:
         """
